@@ -151,7 +151,7 @@ app.get("/api/approval/:id", async (req, res) => {
       date: request.request_date,
       totalAmount: request.total_amount,
       comment: request.comment,
-      aliasName: request.aliasName, // ✅ 별칭 추가됨
+      aliasName: request.aliasName,
       items,
     });
   } catch (err) {
