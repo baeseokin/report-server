@@ -153,8 +153,15 @@ app.get("/api/approval/:id", async (req, res) => {
 
     const request = requests[0];
 
+    // 항목 정보
     const [items] = await pool.query(
       "SELECT gwan, hang, mok, semok, detail, amount FROM approval_items WHERE request_id = ?",
+      [id]
+    );
+
+    // ✅ 첨부파일 정보도 포함
+    const [files] = await pool.query(
+      "SELECT id, file_name, file_path, mime_type, file_size, alias_name FROM approval_files WHERE request_id = ?",
       [id]
     );
 
@@ -168,6 +175,7 @@ app.get("/api/approval/:id", async (req, res) => {
       comment: request.comment,
       aliasName: request.aliasName,
       items,
+      attachedFiles: files   // ✅ 첨부파일 함께 반환
     });
   } catch (err) {
     console.error(err);
