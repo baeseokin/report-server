@@ -189,7 +189,6 @@ app.get("/api/approval/:id", async (req, res) => {
 app.post("/api/approval/:id/files", upload.array("files", 10), async (req, res) => {
   const { id } = req.params;
   try {
-    // 프론트에서 aliasNames 배열을 JSON으로 보내줌
     const aliasNames = req.body.aliasNames ? JSON.parse(req.body.aliasNames) : [];
 
     for (let i = 0; i < req.files.length; i++) {
@@ -230,11 +229,37 @@ app.get("/api/approval/:id/files", async (req, res) => {
 });
 
 /* ------------------------------------------------
-   ✅ 파일 다운로드
+   ✅ 파일 다운로드 & 미리보기
+   - file_path / file_name 둘 다 지원
+   - sendFile() 사용 → 이미지, PDF 미리보기 가능
 ------------------------------------------------ */
-app.get("/api/files/:filename", (req, res) => {
-  const filePath = path.join(uploadDir, req.params.filename);
-  res.download(filePath);
+app.get("/api/files/:filename", async (req, res) => {
+  const filename = req.params.filename;
+
+  try {
+    // 1) uploads/ 안에서 직접 찾기 (file_path 기준)
+    let filePath = path.join(uploadDir, filename);
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(filePath);
+    }
+
+    // 2) DB에서 file_name 으로 검색 후 file_path 찾기
+    const [rows] = await pool.query(
+      "SELECT file_path FROM approval_files WHERE file_name = ? LIMIT 1",
+      [filename]
+    );
+    if (rows.length > 0) {
+      const dbFilePath = path.join(uploadDir, rows[0].file_path);
+      if (fs.existsSync(dbFilePath)) {
+        return res.sendFile(dbFilePath);
+      }
+    }
+
+    return res.status(404).json({ error: "File not found" });
+  } catch (err) {
+    console.error("❌ File Fetch Error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 /* ------------------------------------------------
