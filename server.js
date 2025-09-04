@@ -5,12 +5,22 @@ const mysql = require("mysql2/promise");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-
+const session = require("express-session");
+const bcrypt = require("bcrypt");
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+app.use(cors({ origin: "http://localhost:5174", credentials: true }));
 app.use(bodyParser.json());
+app.use(
+  session({
+    secret: "secret-key",
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false },
+  })
+);
+
 
 // ✅ DB 연결 설정
 const pool = mysql.createPool({
@@ -39,6 +49,12 @@ const upload = multer({ storage });
    ✅ 결재 요청 등록 API
 ------------------------------------------------ */
 app.post("/api/approval", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -92,6 +108,12 @@ app.post("/api/approval", async (req, res) => {
    ✅ 결재 목록 조회 API
 ------------------------------------------------ */
 app.post("/api/approvalList", async (req, res) => {
+  
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   try {
     const { deptName, documentType, startDate, endDate, page = 1, pageSize = 10 } = req.body;
 
@@ -143,6 +165,12 @@ app.post("/api/approvalList", async (req, res) => {
    ✅ 결재요청 상세 조회
 ------------------------------------------------ */
 app.get("/api/approval/:id", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   try {
     const { id } = req.params;
 
@@ -187,6 +215,12 @@ app.get("/api/approval/:id", async (req, res) => {
    ✅ 파일 업로드 API (aliasName 지원)
 ------------------------------------------------ */
 app.post("/api/approval/:id/files", upload.array("files", 10), async (req, res) => {
+
+// 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   const { id } = req.params;
   try {
     const aliasNames = req.body.aliasNames ? JSON.parse(req.body.aliasNames) : [];
@@ -213,6 +247,12 @@ app.post("/api/approval/:id/files", upload.array("files", 10), async (req, res) 
    ✅ 첨부파일 목록 조회 API
 ------------------------------------------------ */
 app.get("/api/approval/:id/files", async (req, res) => {
+
+// 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   const { id } = req.params;
   try {
     const [rows] = await pool.query(
@@ -234,6 +274,12 @@ app.get("/api/approval/:id/files", async (req, res) => {
    - sendFile() 사용 → 이미지, PDF 미리보기 가능
 ------------------------------------------------ */
 app.get("/api/files/:filename", async (req, res) => {
+
+// 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   const filename = req.params.filename;
 
   try {
@@ -261,6 +307,173 @@ app.get("/api/files/:filename", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
+// ---------------------- 로그인 ----------------------
+app.post("/api/login", async (req, res) => {
+  const { userId, password } = req.body;
+  const [rows] = await pool.query("SELECT * FROM users WHERE user_id = ?", [userId]);
+  if (rows.length === 0)
+    return res.status(401).json({ success: false, message: "ID 없음" });
+
+  const user = rows[0];
+  const match = await bcrypt.compare(password, user.password_hash);
+  if (!match)
+    return res.status(401).json({ success: false, message: "비밀번호 불일치" });
+
+  // ✅ 사용자 권한 항상 배열로
+  const [roles] = await pool.query(
+    `SELECT r.id, r.role_name 
+     FROM roles r 
+     JOIN user_roles ur ON r.id = ur.role_id 
+     WHERE ur.user_id = ?`,
+    [user.id]
+  );
+
+  req.session.user = {
+    id: user.id,
+    userId: user.user_id,
+    userName: user.user_name,
+    email: user.email,
+    deptName: user.dept_name,   // ✅ 추가됨
+    // ✅ roles: 무조건 배열 (없으면 빈 배열)
+    roles: roles.length > 0 ? roles : [],
+  };
+
+  res.json({ success: true, user: req.session.user });
+});
+
+// ---------------------- 로그아웃 ----------------------
+app.post("/api/logout", (req, res) => {
+  req.session.destroy();
+  res.json({ success: true });
+});
+
+// ---------------------- 세션 ----------------------
+app.get("/api/session", (req, res) => {
+  if (!req.session.user) {
+    return res.json({ success: false, user: null }); // ✅ 200 응답
+  }
+  res.json({ success: true, user: req.session.user });
+});
+
+// ---------------------- 사용자 관리 ----------------------
+app.get("/api/users", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const [rows] = await pool.query("SELECT id, user_id, user_name, email, phone, dept_name FROM users");
+  res.json({ users: rows });
+});
+
+app.post("/api/users", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { userId, userName, email, phone, deptName, password, roles } = req.body;
+
+  // 비밀번호 규칙 체크
+  const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
+  if (!regex.test(password)) {
+    return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
+  }
+
+  const hash = await bcrypt.hash(password, 10);
+  const [result] = await pool.query(
+    "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
+    [userId, userName, email, phone, deptName, hash]
+  );
+  const userIdInserted = result.insertId;
+
+  if (roles && roles.length > 0) {
+    for (const roleId of roles) {
+      await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
+        userIdInserted,
+        roleId,
+      ]);
+    }
+  }
+
+  res.json({ success: true });
+});
+
+
+// ---------------------- 권한 목록 ----------------------
+app.get("/api/roles", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const [rows] = await pool.query("SELECT * FROM roles");
+  res.json({ roles: rows });
+});
+
+// ---------------------- 권한별 접근 관리 ----------------------
+// 특정 역할(roleId)의 접근 목록 조회
+app.get("/api/access/:roleId", async (req, res) => {
+
+// 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { roleId } = req.params;
+  const [rows] = await pool.query(
+    "SELECT menu_name, access_type FROM access_controls WHERE role_id = ?",
+    [roleId]
+  );
+  res.json({ access: rows });
+});
+
+// 권한 추가/삭제
+app.post("/api/access", async (req, res) => {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { roleId, menuName, accessType, enabled } = req.body;
+
+  if (enabled) {
+    await pool.query(
+      "INSERT IGNORE INTO access_controls (role_id, menu_name, access_type) VALUES (?, ?, ?)",
+      [roleId, menuName, accessType]
+    );
+  } else {
+    await pool.query(
+      "DELETE FROM access_controls WHERE role_id = ? AND menu_name = ? AND access_type = ?",
+      [roleId, menuName, accessType]
+    );
+  }
+
+  res.json({ success: true });
+});
+
+// 권한 체크 미들웨어
+async function checkAccess(roleIds, menu, type) {
+
+  // 세션에 user 정보가 없으면 로그인 안 된 상태
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const [rows] = await pool.query(
+    "SELECT 1 FROM access_controls WHERE role_id IN (?) AND menu_name=? AND access_type=?",
+    [roleIds, menu, type]
+  );
+  return rows.length > 0;
+}
+
+
+
 
 /* ------------------------------------------------
    ✅ 서버 실행
