@@ -466,42 +466,167 @@ app.get("/api/session", (req, res) => {
 /* ------------------------------------------------
    ✅ 사용자 관리
 ------------------------------------------------ */
+/* ------------------------------------------------
+   ✅ 사용자 API (CRUD)
+------------------------------------------------ */
+// ✅ 사용자 검색 API
+app.get("/api/users/search", async (req, res) => {
+  const { dept, role, name } = req.query;
+
+  let query = `
+    SELECT u.id, u.user_id AS userId, u.user_name AS name, u.email, u.phone, 
+           u.dept_name AS dept,
+           GROUP_CONCAT(r.id) AS roles
+    FROM users u
+    LEFT JOIN user_roles ur ON u.id = ur.user_id
+    LEFT JOIN roles r ON ur.role_id = r.id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (dept) {
+    query += " AND u.dept_name LIKE ?";
+    params.push(`%${dept}%`);
+  }
+  if (role) {
+    query += " AND r.role_name = ?";
+    params.push(role);
+  }
+  if (name) {
+    query += " AND u.user_name LIKE ?";
+    params.push(`%${name}%`);
+  }
+
+  query += " GROUP BY u.id";
+
+  try {
+    const [rows] = await pool.query(query, params);
+    res.json(rows);
+  } catch (err) {
+    console.error("검색 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+// ✅ 사용자 목록 조회 (roles, dept_name alias 포함)
 app.get("/api/users", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
-  const [rows] = await pool.query("SELECT id, user_id, user_name, email, phone, dept_name FROM users");
-  res.json({ users: rows });
+
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.id, u.user_id AS userId, u.user_name AS name, u.email, u.phone, 
+             u.dept_name AS dept,
+             GROUP_CONCAT(r.role_name) AS roles
+      FROM users u
+      LEFT JOIN user_roles ur ON u.id = ur.user_id
+      LEFT JOIN roles r ON ur.role_id = r.id
+      GROUP BY u.id
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error("사용자 조회 실패:", err);
+    res.status(500).json({ success: false });
+  }
 });
 
+// ✅ 사용자 등록
 app.post("/api/users", async (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
-  }
+  if (!req.session.user) return res.status(401).json({ success: false });
 
-  const { userId, userName, email, phone, deptName, password, roles } = req.body;
-  const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
-  if (!regex.test(password)) {
-    return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
-  }
+  const { userId, name, email, phone, dept, password, roles } = req.body;
 
-  const hash = await bcrypt.hash(password, 10);
-  const [result] = await pool.query(
-    "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
-    [userId, userName, email, phone, deptName, hash]
-  );
-  const userIdInserted = result.insertId;
-
-  if (roles && roles.length > 0) {
-    for (const roleId of roles) {
-      await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
-        userIdInserted,
-        roleId,
-      ]);
+  try {
+    const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
+    if (!regex.test(password)) {
+      return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
     }
+
+    const hash = await bcrypt.hash(password, 10);
+    const [result] = await pool.query(
+      "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
+      [userId, name, email, phone, dept, hash]
+    );
+
+    const insertedUserId = result.insertId;
+
+    if (roles && roles.length > 0) {
+      for (const roleName of roles) {
+        const [roleRow] = await pool.query("SELECT id FROM roles WHERE role_name=?", [roleName]);
+        if (roleRow.length > 0) {
+          await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
+            insertedUserId,
+            roleRow[0].id,
+          ]);
+        }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("사용자 등록 실패:", err);
+    res.status(500).json({ success: false });
   }
-  res.json({ success: true });
 });
+
+// ✅ 사용자 수정 (비밀번호 변경 포함)
+app.put("/api/users/:id", async (req, res) => {
+  const { name, email, phone, dept, roles, newPassword } = req.body;
+
+  try {
+    // 1. 기본 사용자 정보 업데이트
+    await pool.query(
+      "UPDATE users SET user_name=?, email=?, phone=?, dept_name=? WHERE id=?",
+      [name, email, phone, dept, req.params.id]
+    );
+
+    // 2. 비밀번호 변경 처리 (선택적)
+    if (newPassword && newPassword.trim() !== "") {
+      const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
+      if (!regex.test(newPassword)) {
+        return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
+      }
+
+      const hash = await bcrypt.hash(newPassword, 10);
+      await pool.query(
+        "UPDATE users SET password_hash=? WHERE id=?",
+        [hash, req.params.id]
+      );
+    }
+
+    console.log("roles :", roles);
+
+    // 3. 역할 갱신
+    await pool.query("DELETE FROM user_roles WHERE user_id=?", [req.params.id]);
+    if (roles && Array.isArray(roles)) {
+      for (const roleId of roles) {
+        await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
+          req.params.id,
+          roleId,
+        ]);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("사용자 수정 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+
+// ✅ 사용자 삭제
+app.delete("/api/users/:id", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM users WHERE id=?", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("사용자 삭제 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
 
 /* ------------------------------------------------
    ✅ 권한 관리
@@ -510,40 +635,76 @@ app.get("/api/roles", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
-  const [rows] = await pool.query("SELECT * FROM roles");
-  res.json({ roles: rows });
+  try {
+    const [rows] = await pool.query("SELECT id AS role_id, role_name FROM roles");
+    res.json(rows);
+  } catch (err) {
+    console.error("역할 조회 실패:", err);
+    res.status(500).json({ success: false });
+  }
 });
 
+// ✅ 특정 역할의 접근 권한 조회
 app.get("/api/access/:roleId", async (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  try {
+    const [rows] = await pool.query(
+      "SELECT menu_name, access_type FROM role_access WHERE role_id = ?",
+      [req.params.roleId]
+    );
+    res.json({ access: rows });
+  } catch (err) {
+    console.error("권한 조회 실패:", err);
+    res.status(500).json({ success: false });
   }
-  const { roleId } = req.params;
-  const [rows] = await pool.query(
-    "SELECT menu_name, access_type FROM access_controls WHERE role_id = ?",
-    [roleId]
-  );
-  res.json({ access: rows });
 });
 
+// ✅ 접근 권한 추가/삭제 (토글)
 app.post("/api/access", async (req, res) => {
-  if (!req.session.user) {
-    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
-  }
   const { roleId, menuName, accessType, enabled } = req.body;
-  if (enabled) {
-    await pool.query(
-      "INSERT IGNORE INTO access_controls (role_id, menu_name, access_type) VALUES (?, ?, ?)",
-      [roleId, menuName, accessType]
-    );
-  } else {
-    await pool.query(
-      "DELETE FROM access_controls WHERE role_id = ? AND menu_name = ? AND access_type = ?",
-      [roleId, menuName, accessType]
-    );
+
+  try {
+    if (enabled) {
+      // 추가 (중복 허용 X → INSERT IGNORE)
+      await pool.query(
+        "INSERT IGNORE INTO role_access (role_id, menu_name, access_type) VALUES (?, ?, ?)",
+        [roleId, menuName, accessType]
+      );
+    } else {
+      // 제거
+      await pool.query(
+        "DELETE FROM role_access WHERE role_id=? AND menu_name=? AND access_type=?",
+        [roleId, menuName, accessType]
+      );
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error("권한 저장 실패:", err);
+    res.status(500).json({ success: false });
   }
-  res.json({ success: true });
 });
+
+// ✅ 역할별 모든 권한 삭제 (초기화 용도)
+app.delete("/api/access/:roleId", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM role_access WHERE role_id=?", [req.params.roleId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("권한 초기화 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+// 부서 목록 조회
+app.get("/api/departments", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT id, dept_name FROM departments ORDER BY id");
+    res.json(rows);
+  } catch (err) {
+    console.error("부서 조회 실패:", err);
+    res.status(500).json({ error: "부서 조회 실패" });
+  }
+});
+
 
 /* ------------------------------------------------
    ✅ 서버 실행
