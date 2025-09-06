@@ -351,7 +351,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
 
 
 /* ------------------------------------------------
-   ✅ 결재 승인 API
+   ✅ 결재 승인 API (수정됨)
 ------------------------------------------------ */
 app.post("/api/approval/approve", upload.single("signature"), async (req, res) => {
   if (!req.session.user) {
@@ -376,10 +376,10 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     const { dept_name, current_approver_role, current_approver_name } = reqRows[0];
 
-    // ✅ 결재 이력 기록
+    // ✅ 결재 이력 기록 (approved_at 추가!)
     await conn.query(
-      `INSERT INTO approval_history (request_id, approver_role, approver_name, comment, signature_path)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT INTO approval_history (request_id, approver_role, approver_name, comment, signature_path, approved_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
       [requestId, current_approver_role, current_approver_name, comment, signaturePath]
     );
 
@@ -422,6 +422,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     conn.release();
   }
 });
+
 
 /* ------------------------------------------------
    ✅ 파일 업로드/다운로드 API
