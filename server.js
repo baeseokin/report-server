@@ -169,6 +169,36 @@ app.post("/api/approval", async (req, res) => {
   }
 });
 
+
+// ✅ 결재 히스토리 저장 API
+app.post("/api/approval/history", upload.single("signature"), async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const { requestId, approver_role, approver_name, comment } = req.body;
+    const signaturePath = req.file ? req.file.filename : null;
+
+    if (!requestId || !approver_name) {
+      return res.status(400).json({ success: false, message: "필수 값 누락" });
+    }
+
+    await pool.query(
+      `INSERT INTO approval_history (request_id, approver_role, approver_name, comment, signature_path, approved_at)
+       VALUES (?, ?, ?, ?, ?, NOW())`,
+      [requestId, approver_role, approver_name, comment, signaturePath]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ approval_history 저장 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+
 /* ------------------------------------------------
    ✅ 결재 목록 조회 API
 ------------------------------------------------ */
