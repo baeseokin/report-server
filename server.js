@@ -13,18 +13,36 @@ const app = express();
 const PORT = 3001;
 
 // ✅ CORS 설정 (.env 기반)
+const allowedOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(",").map(o => o.trim())
+  : [];
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || true,
+  origin: function (origin, callback) {
+    console.log("🌍 요청 Origin:", origin); 
+    // 개발용: origin 없을 때 (예: Postman) 허용
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      console.warn("❌ CORS 차단:", origin);
+      callback(new Error("CORS not allowed: " + origin));
+    }
+  },
   credentials: true
 }));
+
 
 app.use(bodyParser.json());
 app.use(
   session({
     secret: "secret-key",
     resave: false,
-    saveUninitialized: true,
-    cookie: { secure: false },
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: false,       // HTTPS 아니면 false
+      sameSite: "lax"      // 모바일에서도 안전하게 동작
+    }
   })
 );
 
@@ -425,13 +443,20 @@ app.get("/api/files/:filename", async (req, res) => {
 ------------------------------------------------ */
 app.post("/api/login", async (req, res) => {
   const { userId, password } = req.body;
+  console.log("📥 로그인 시도:", userId, "IP:", req.ip);
+
   const [rows] = await pool.query("SELECT * FROM users WHERE user_id = ?", [userId]);
-  if (rows.length === 0) return res.status(401).json({ success: false, message: "ID 없음" });
+  if (rows.length === 0) {
+    console.warn("❌ 로그인 실패: ID 없음", userId);
+    return res.status(401).json({ success: false, message: "ID 없음" });
+  }
 
   const user = rows[0];
   const match = await bcrypt.compare(password, user.password_hash);
-  if (!match) return res.status(401).json({ success: false, message: "비밀번호 불일치" });
-
+  if (!match) {
+    console.warn("❌ 로그인 실패: 비밀번호 불일치", userId);
+    return res.status(401).json({ success: false, message: "비밀번호 불일치" });
+  }
   const [roles] = await pool.query(
     `SELECT r.id, r.role_name 
      FROM roles r 
@@ -448,6 +473,7 @@ app.post("/api/login", async (req, res) => {
     deptName: user.dept_name,
     roles: roles.length > 0 ? roles : [],
   };
+  console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
   res.json({ success: true, user: req.session.user });
 });
 
