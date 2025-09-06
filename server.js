@@ -183,10 +183,35 @@ app.post("/api/approvalList", async (req, res) => {
     let where = "WHERE 1=1";
     const params = [];
 
+    // ✅ 현재 부서 + 하위부서 조회
+    let deptList = [];
     if (deptName) {
-      where += " AND ar.dept_name LIKE ?";
-      params.push(`%${deptName}%`);
+      const [subDepts] = await pool.query(
+        `WITH RECURSIVE sub_depts AS (
+          SELECT id, dept_name, parent_dept_id
+          FROM departments
+          WHERE dept_name = ?
+          UNION ALL
+          SELECT d.id, d.dept_name, d.parent_dept_id
+          FROM departments d
+          INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
+        )
+        SELECT dept_name FROM sub_depts`,
+        [deptName]
+      );
+      deptList = subDepts.map(d => d.dept_name);
     }
+
+    if (deptList.length > 0) {
+      where += ` AND ar.dept_name IN (${deptList.map(() => "?").join(",")})`;
+      params.push(...deptList);
+    }
+
+
+    // if (deptName) {
+    //   where += " AND ar.dept_name LIKE ?";
+    //   params.push(`%${deptName}%`);
+    // }
     if (documentType) {
       where += " AND ar.document_type = ?";
       params.push(documentType);
