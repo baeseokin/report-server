@@ -84,7 +84,7 @@ app.post("/api/approval", async (req, res) => {
     const { documentType, deptName, author, date, totalAmount, comment, aliasName, items } =
       req.body;
 
-    // approval_requests 저장 (결재자 필드는 일단 NULL)
+    // approval_requests 저장 (status = 진행중)
     const [result] = await conn.query(
       `INSERT INTO approval_requests 
        (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status) 
@@ -120,7 +120,7 @@ app.post("/api/approval", async (req, res) => {
       }
     }
 
-    // ✅ approval_requests에 현재 결재자 업데이트
+    // ✅ approval_requests에 다음 결재자 업데이트
     if (nextApprover) {
       await conn.query(
         `UPDATE approval_requests 
@@ -128,15 +128,8 @@ app.post("/api/approval", async (req, res) => {
           WHERE id = ?`,
         [nextApprover.role, nextApprover.approver_name, requestId]
       );
-    } else {
-      // 만약 다음 결재자가 없으면 → 최종 승인 처리
-      await conn.query(
-        `UPDATE approval_requests 
-            SET status = '완료' 
-          WHERE id = ?`,
-        [requestId]
-      );
     }
+    // ❌ else 제거 → 자동 완료 금지
 
     // approval_items 저장
     if (items && items.length > 0) {
@@ -349,9 +342,8 @@ app.get("/api/approval/detail/:id", async (req, res) => {
   }
 });
 
-
 /* ------------------------------------------------
-   ✅ 결재 승인 API (수정됨)
+   ✅ 결재 승인 API
 ------------------------------------------------ */
 app.post("/api/approval/approve", upload.single("signature"), async (req, res) => {
   if (!req.session.user) {
@@ -367,7 +359,8 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     const [reqRows] = await conn.query(
       `SELECT dept_name, current_approver_role, current_approver_name
-       FROM approval_requests WHERE id=?`,
+         FROM approval_requests 
+        WHERE id=? FOR UPDATE`,
       [requestId]
     );
     if (reqRows.length === 0) {
@@ -376,10 +369,16 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     const { dept_name, current_approver_role, current_approver_name } = reqRows[0];
 
-    // ✅ 결재 이력 기록 (approved_at 추가!)
+    // ✅ 로그인한 사용자가 실제 결재자인지 검증
+    if (current_approver_name !== req.session.user.userName) {
+      return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
+    }
+
+    // ✅ 승인 이력 기록
     await conn.query(
-      `INSERT INTO approval_history (request_id, approver_role, approver_name, comment, signature_path, approved_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
+      `INSERT INTO approval_history 
+         (request_id, approver_role, approver_name, comment, signature_path, status, approved_at)
+       VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
       [requestId, current_approver_role, current_approver_name, comment, signaturePath]
     );
 
@@ -392,21 +391,24 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     const [nextRows] = await conn.query(
       `SELECT approver_role, approver_name 
-       FROM approval_line WHERE dept_name=? AND order_no=?`,
+         FROM approval_line 
+        WHERE dept_name=? AND order_no=?`,
       [dept_name, currentOrder + 1]
     );
 
     if (nextRows.length > 0) {
+      // 다음 결재자 지정
       await conn.query(
         `UPDATE approval_requests
-         SET current_approver_role=?, current_approver_name=?, updated_at=NOW()
+           SET current_approver_role=?, current_approver_name=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
          WHERE id=?`,
         [nextRows[0].approver_role, nextRows[0].approver_name, requestId]
       );
     } else {
+      // 마지막 결재자 → 완료 처리
       await conn.query(
         `UPDATE approval_requests
-         SET status='완료', updated_at=NOW()
+           SET status='완료', updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
          WHERE id=?`,
         [requestId]
       );
@@ -422,6 +424,68 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     conn.release();
   }
 });
+
+
+/* ------------------------------------------------
+   ✅ 결재 반려 API
+------------------------------------------------ */
+app.post("/api/approval/reject", upload.single("signature"), async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { requestId, comment } = req.body;
+  const signaturePath = req.file ? req.file.filename : null;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [reqRows] = await conn.query(
+      `SELECT current_approver_role, current_approver_name 
+         FROM approval_requests 
+        WHERE id=? FOR UPDATE`,
+      [requestId]
+    );
+    if (reqRows.length === 0) {
+      return res.status(404).json({ success: false, message: "결재 요청 없음" });
+    }
+
+    const { current_approver_role, current_approver_name } = reqRows[0];
+
+    // ✅ 로그인한 사용자가 실제 결재자인지 검증
+    if (current_approver_name !== req.session.user.userName) {
+      return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
+    }
+
+    // ✅ 반려 이력 기록
+    await conn.query(
+      `INSERT INTO approval_history 
+         (request_id, approver_role, approver_name, comment, signature_path, status, approved_at)
+       VALUES (?, ?, ?, ?, ?, '반려', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
+      [requestId, current_approver_role, current_approver_name, comment, signaturePath]
+    );
+
+    // ✅ 결재 요청 반려 처리
+    await conn.query(
+      `UPDATE approval_requests 
+          SET status='반려', updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00'),
+              current_approver_role=NULL, current_approver_name=NULL
+        WHERE id=?`,
+      [requestId]
+    );
+
+    await conn.commit();
+    res.json({ success: true, message: "결재가 반려되었습니다." });
+  } catch (error) {
+    await conn.rollback();
+    console.error("❌ 결재 반려 오류:", error);
+    res.status(500).json({ success: false, message: "결재 반려 실패" });
+  } finally {
+    conn.release();
+  }
+});
+
 
 
 /* ------------------------------------------------
