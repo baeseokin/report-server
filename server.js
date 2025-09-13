@@ -316,7 +316,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
 
     // ✅ 결재 이력
     const [history] = await pool.query(
-      `SELECT approver_name, approver_role, comment, signature_path, approved_at
+      `SELECT approver_name, approver_role, comment, signature_path, approved_at, status
          FROM approval_history
         WHERE request_id = ?
         ORDER BY approved_at ASC`,
