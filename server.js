@@ -48,7 +48,7 @@ app.use(
 
 // ✅ DB 연결 설정
 const pool = mysql.createPool({
-  host: "localhost",
+  host: "mariadb-service",
   port: 32006,
   user: "reportuser",
   password: "reportpass",
