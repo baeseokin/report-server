@@ -10,7 +10,7 @@ CREATE TABLE `approval_files` (
   `alias_name` varchar(255) DEFAULT NULL,
   `uploaded_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=23 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_history definition
@@ -22,10 +22,11 @@ CREATE TABLE `approval_history` (
   `approver_name` varchar(100) NOT NULL,
   `comment` text DEFAULT NULL,
   `signature_path` varchar(255) DEFAULT NULL,
+  `status` enum('승인','반려') NOT NULL DEFAULT '승인',
   `approved_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `request_id` (`request_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=88 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_items definition
@@ -41,7 +42,7 @@ CREATE TABLE `approval_items` (
   `amount` bigint(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `request_id` (`request_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=47 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_line definition
@@ -88,7 +89,7 @@ CREATE TABLE `approval_requests` (
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=41 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.dept_approvers definition
@@ -156,7 +157,7 @@ CREATE TABLE `role_access` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `role_id` (`role_id`,`menu_name`,`access_type`),
   CONSTRAINT `role_access_ibfk_1` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=20 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.user_roles definition
@@ -169,67 +170,3 @@ CREATE TABLE `user_roles` (
   CONSTRAINT `user_roles_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
   CONSTRAINT `user_roles_ibfk_2` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
-
-INSERT INTO reportdb.approval_line (dept_name,approver_role,approver_name,order_no) VALUES
-	 ('원천엔젤스','회계','배석인',1),
-	 ('원천엔젤스','부장','김개욱',2),
-	 ('원천엔젤스','위원장','이종민',3);
-
-INSERT INTO reportdb.departments (dept_name,parent_dept_id,created_at,updated_at) VALUES
-	 ('교회',NULL,'2025-09-06 07:35:33','2025-09-06 07:35:33'),
-	 ('음악부',1,'2025-09-06 07:35:34','2025-09-06 07:35:34'),
-	 ('교육부',1,'2025-09-06 07:35:34','2025-09-06 07:35:34'),
-	 ('재정부',1,'2025-09-06 07:35:34','2025-09-06 07:35:34'),
-	 ('원천엔젤스',2,'2025-09-06 07:35:38','2025-09-06 07:35:38'),
-	 ('할렐루야찬양대',2,'2025-09-06 07:35:38','2025-09-06 07:35:38'),
-	 ('임마누엘찬양대',2,'2025-09-06 07:35:38','2025-09-06 07:35:38'),
-	 ('샬롬찬양대',2,'2025-09-06 07:35:38','2025-09-06 07:35:38'),
-	 ('청년부',3,'2025-09-06 07:35:41','2025-09-06 07:35:41');
-
-INSERT INTO reportdb.dept_approvers (dept_name,`role`,approver_name,approver_user_id,approver_order,is_active,created_at) VALUES
-	 ('원천엔젤스','담당','배석인','user02',1,1,'2025-09-05 12:05:45'),
-	 ('원천엔젤스','부장','김개욱','user03',2,1,'2025-09-05 12:06:46'),
-	 ('원천엔젤스','위원장','이종민','user04',3,1,'2025-09-05 12:06:48');
-
-INSERT INTO reportdb.role_access (role_id,menu_name,access_type) VALUES
-	 (1,'권한 관리','all'),
-	 (1,'내결재목록 조회','all'),
-	 (1,'보고서 작성','all'),
-	 (1,'사용자 관리','all'),
-	 (1,'청구목록 조회','all'),
-	 (2,'내결재목록 조회','all'),
-	 (2,'보고서 작성','all'),
-	 (2,'청구목록 조회','all'),
-	 (3,'내결재목록 조회','all'),
-	 (3,'청구목록 조회','all');
-INSERT INTO reportdb.role_access (role_id,menu_name,access_type) VALUES
-	 (4,'내결재목록 조회','all'),
-	 (4,'청구목록 조회','all'),
-	 (5,'내결재목록 조회','all'),
-	 (5,'청구목록 조회','all'),
-	 (6,'내결재목록 조회','all'),
-	 (6,'보고서 작성','all'),
-	 (6,'청구목록 조회','all');
-
-INSERT INTO reportdb.roles (role_name) VALUES
-	 ('관리자'),
-	 ('당회장'),
-	 ('부장'),
-	 ('위원장'),
-	 ('재정부'),
-	 ('회계');
-
-INSERT INTO reportdb.user_roles (user_id,role_id) VALUES
-	 (1,1),
-	 (3,2),
-	 (4,3),
-	 (5,4),
-	 (8,6);
-
-INSERT INTO reportdb.users (user_id,user_name,email,phone,dept_name,password_hash,created_at) VALUES
-	 ('user01','관리자','2222@naver.com','1','교회','$2b$10$PY2LIFazvdE0DL4BG4YHhu76Zc5SSsApp.qIdFNBVBUWi/.lr82K6','2025-09-04 12:06:35'),
-	 ('user02','배석인','','','원천엔젤스','$2b$10$RdUwLN765Y/.TwU5reKSI.AsnMFD4F0xUDnePgxY8nficBw5inJrC','2025-09-04 12:49:28'),
-	 ('user03','김개욱','2222@ee.com','','음악부','$2b$10$ous4ef/ISKhaiqa08hwpfOIOYveBa9s/6Yo0RkTbBpc/grKJsuu3O','2025-09-05 12:20:09'),
-	 ('user04','이종민','','','음악부','$2b$10$HyUcMFCuyTL5T2TLb6QY/eVHssikD3RSJQ2yd/f5JGbuWThogsrOa','2025-09-05 12:20:49'),
-	 ('user05','재정부','','','재정부','$2b$10$Kt6.tcqzEDaid95P2MApmuMczv.MEtlpGH11aisgRrMi1IIE4pMqi','2025-09-05 14:01:21');
-
