@@ -249,10 +249,12 @@ app.post("/api/approvalList", async (req, res) => {
       where += " AND ar.request_date <= ?";
       params.push(endDate);
     }
-        // ✅ 진행상태
+    // ✅ 진행상태
     if (status) {
-      where += " AND ar.status = ?";
-      params.push(status);
+      if (status != "전체") {
+        where += " AND ar.status = ?";
+        params.push(status);
+      }
     }
 
     // ✅ 현재 결재자
