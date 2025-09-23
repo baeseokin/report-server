@@ -857,6 +857,102 @@ app.get("/api/departments", async (req, res) => {
 
 
 /* ------------------------------------------------
+   ✅ Account Categories API (CRUD)
+------------------------------------------------ */
+
+// 특정 부서별 계정과목 조회 (기준일자 조건 포함)
+app.get("/api/accountCategories/:deptId", async (req, res) => {
+  try {
+    const deptId = req.params.deptId;
+    const { date } = req.query;
+
+    let query = `
+      SELECT id, dept_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
+        FROM account_categories
+       WHERE dept_id = ?
+    `;
+    const params = [deptId];
+
+    // ✅ 기준일자가 있으면 유효기간 조건 추가
+    if (date) {
+      query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
+      params.push(date, date);
+    }
+
+    query += ` ORDER BY parent_id, id`;
+
+    const [rows] = await pool.query(query, params);
+
+    res.json({ success: true, categories: rows });
+  } catch (err) {
+    console.error("❌ accountCategories 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 계정과목 추가
+app.post("/api/accountCategories", async (req, res) => {
+  try {
+    const { dept_id, parent_id, category_name, level, valid_from, valid_to } = req.body;
+    const [result] = await pool.query(
+      `INSERT INTO account_categories (dept_id, parent_id, category_name, level, valid_from, valid_to)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [dept_id, parent_id || null, category_name, level, valid_from || new Date(), valid_to || null]
+    );
+    res.json({ success: true, id: result.insertId });
+  } catch (err) {
+    console.error("❌ accountCategories 추가 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 계정과목 수정
+app.put("/api/accountCategories/:id", async (req, res) => {
+  try {
+    const { category_name, level, parent_id, valid_from, valid_to } = req.body;
+    await pool.query(
+      `UPDATE account_categories 
+          SET category_name=?, level=?, parent_id=?, valid_from=?, valid_to=?, updated_at=NOW()
+        WHERE id=?`,
+      [category_name, level, parent_id || null, valid_from, valid_to, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ accountCategories 수정 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 계정과목 종료(valid_to 업데이트)
+app.put("/api/accountCategories/:id/expire", async (req, res) => {
+  try {
+    const { valid_to } = req.body;
+    await pool.query(
+      `UPDATE account_categories 
+          SET valid_to=?, updated_at=NOW()
+        WHERE id=?`,
+      [valid_to || new Date(), req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ accountCategories 종료 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 계정과목 삭제
+app.delete("/api/accountCategories/:id", async (req, res) => {
+  try {
+    await pool.query("DELETE FROM account_categories WHERE id=?", [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ accountCategories 삭제 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+/* ------------------------------------------------
    ✅ 서버 실행
 ------------------------------------------------ */
 app.listen(PORT, "0.0.0.0", () => {
