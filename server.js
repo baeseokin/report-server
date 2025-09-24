@@ -416,6 +416,42 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
          WHERE id=?`,
         [requestId]
       );
+
+      // ✅ 신청 총액 가져오기
+      const [[{ totalAmount }]] = await conn.query(
+        `SELECT SUM(amount) AS totalAmount FROM approval_items WHERE request_id=?`,
+        [requestId]
+      );
+
+      // ✅ dept_id 조회
+      const [[deptRow]] = await conn.query(
+        `SELECT id FROM departments WHERE dept_name=?`,
+        [dept_name]
+      );
+
+      // ✅ 최상위 계정(category_id: 관) 찾기
+      const [[categoryRow]] = await conn.query(
+        `SELECT id FROM account_categories 
+          WHERE dept_id=? AND parent_id IS NULL 
+          ORDER BY id LIMIT 1`,
+        [deptRow.id]
+      );
+
+      if (categoryRow && totalAmount > 0) {
+        await conn.query(
+          `INSERT INTO expense_details 
+             (dept_id, category_id, year, expense_date, amount, description, approval_request_id) 
+           VALUES (?, ?, YEAR(CURDATE()), CURDATE(), ?, ?, ?)`,
+          [
+            deptRow.id,
+            categoryRow.id,
+            totalAmount,
+            `결재 ID ${requestId} 최종 승인 합계`,
+            requestId
+          ]
+        );
+      }
+
     }
 
     await conn.commit();
