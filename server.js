@@ -952,6 +952,69 @@ app.delete("/api/accountCategories/:id", async (req, res) => {
 });
 
 
+// 부서별 예산 조회
+app.get("/api/budgets/:deptId", async (req, res) => {
+  try {
+    const { year } = req.query;
+    const [rows] = await pool.query(
+      `SELECT id, dept_id, category_id, year, budget_amount
+         FROM budgets
+        WHERE dept_id = ? AND year = ?`,
+      [req.params.deptId, year]
+    );
+    res.json({ success: true, budgets: rows });
+  } catch (err) {
+    console.error("❌ budgets 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 예산 입력/수정 (Upsert)
+app.post("/api/budgets", async (req, res) => {
+  try {
+    const { dept_id, category_id, year, budget_amount } = req.body;
+    await pool.query(
+      `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
+       VALUES (?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE budget_amount=?, updated_at=NOW()`,
+      [dept_id, category_id, year, budget_amount, budget_amount]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ budgets 저장 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 일괄 예산 저장 (Upsert)
+app.post("/api/budgets/bulk", async (req, res) => {
+  try {
+    const budgets = req.body.budgets;
+    if (!Array.isArray(budgets) || budgets.length === 0) {
+      return res.status(400).json({ success: false, error: "예산 데이터 없음" });
+    }
+
+    const values = budgets.map(b => [b.dept_id, b.category_id, b.year, b.budget_amount]);
+
+    await pool.query(
+      `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
+       VALUES ?
+       ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount), updated_at = NOW()`,
+      [values]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ bulk 예산 저장 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+
+
+
+
 /* ------------------------------------------------
    ✅ 서버 실행
 ------------------------------------------------ */
