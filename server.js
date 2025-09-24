@@ -72,6 +72,58 @@ const storage = multer.diskStorage({
 const upload = multer({ storage });
 
 /* ------------------------------------------------
+   📊 부서별 예산 & 지출 합계 조회 API
+   GET /api/expenses/summary?deptId=1&year=2025
+------------------------------------------------ */
+app.get("/api/expenses/summary", async (req, res) => {
+  try {
+    const { deptId, year } = req.query;
+    if (!deptId || !year) {
+      return res.status(400).json({ success: false, message: "deptId, year 필요" });
+    }
+
+    // ✅ 최상위 계정(관) 가져오기
+    const [rootRows] = await pool.query(
+      `SELECT id 
+         FROM account_categories 
+        WHERE parent_id IS NULL AND level='관'
+        LIMIT 1`
+    );
+    if (rootRows.length === 0) {
+      return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
+    }
+    const rootCategoryId = rootRows[0].id;
+
+    // ✅ 예산 총액 (budgets)
+    const [[budgetRow]] = await pool.query(
+      `SELECT COALESCE(SUM(budget_amount),0) AS totalBudget
+         FROM budgets
+        WHERE dept_id=? AND year=? AND category_id=?`,
+      [deptId, year, rootCategoryId]
+    );
+
+    // ✅ 지출 총액 (expense_details)
+    const [[expenseRow]] = await pool.query(
+      `SELECT COALESCE(SUM(amount),0) AS totalExpense
+         FROM expense_details
+        WHERE dept_id=? AND year=?`,
+      [deptId, year]
+    );
+
+    res.json({
+      success: true,
+      totalBudget: budgetRow.totalBudget,
+      totalExpense: expenseRow.totalExpense,
+    });
+  } catch (err) {
+    console.error("❌ /api/expenses/summary 오류:", err);
+    res.status(500).json({ success: false, message: "조회 실패" });
+  }
+});
+
+
+
+/* ------------------------------------------------
    ✅ 결재 요청 등록 API (결재자 라인 반영)
 ------------------------------------------------ */
 app.post("/api/approval", async (req, res) => {
@@ -605,36 +657,55 @@ app.post("/api/login", async (req, res) => {
   const { userId, password } = req.body;
   console.log("📥 로그인 시도:", userId, "IP:", req.ip);
 
-  const [rows] = await pool.query("SELECT * FROM users WHERE user_id = ?", [userId]);
-  if (rows.length === 0) {
-    console.warn("❌ 로그인 실패: ID 없음", userId);
-    return res.status(401).json({ success: false, message: "ID 없음" });
+  try {
+      const [rows] = await pool.query(
+        `SELECT u.*, d.id AS dept_id, d.dept_name
+          FROM users u
+          LEFT JOIN departments d ON u.dept_name = d.dept_name
+          WHERE u.user_id = ?`,
+        [userId]
+      );
+
+      if (rows.length === 0) {
+        console.warn("❌ 로그인 실패: ID 없음", userId);
+        return res.status(401).json({ success: false, message: "ID 없음" });
+      }
+
+      const user = rows[0];
+
+      console.log("user:", user);
+
+      const match = await bcrypt.compare(password, user.password_hash);
+      if (!match) {
+        console.warn("❌ 로그인 실패: 비밀번호 불일치", userId);
+        return res.status(401).json({ success: false, message: "비밀번호 불일치" });
+      }
+      const [roles] = await pool.query(
+        `SELECT r.id, r.role_name 
+        FROM roles r 
+        JOIN user_roles ur ON r.id = ur.role_id 
+        WHERE ur.user_id = ?`,
+        [user.id]
+      );
+
+      req.session.user = {
+        id: user.id,
+        userId: user.user_id,
+        userName: user.user_name,
+        email: user.email,
+        deptName: user.dept_name,
+        deptId: user.dept_id,
+        roles: roles.length > 0 ? roles : [],
+      };
+      console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
+      console.log("✅ req.session.user :", req.session.user );
+      res.json({ success: true, user: req.session.user });
+
+  } catch (error) {
+    console.error("❌ 로그인 처리 오류:", error);
+    res.status(500).json({ success: false, message: "로그인 처리 실패" });
   }
 
-  const user = rows[0];
-  const match = await bcrypt.compare(password, user.password_hash);
-  if (!match) {
-    console.warn("❌ 로그인 실패: 비밀번호 불일치", userId);
-    return res.status(401).json({ success: false, message: "비밀번호 불일치" });
-  }
-  const [roles] = await pool.query(
-    `SELECT r.id, r.role_name 
-     FROM roles r 
-     JOIN user_roles ur ON r.id = ur.role_id 
-     WHERE ur.user_id = ?`,
-    [user.id]
-  );
-
-  req.session.user = {
-    id: user.id,
-    userId: user.user_id,
-    userName: user.user_name,
-    email: user.email,
-    deptName: user.dept_name,
-    roles: roles.length > 0 ? roles : [],
-  };
-  console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
-  res.json({ success: true, user: req.session.user });
 });
 
 app.post("/api/logout", (req, res) => {
@@ -643,6 +714,7 @@ app.post("/api/logout", (req, res) => {
 });
 
 app.get("/api/session", (req, res) => {
+  console.log("req.session.user :", req.session.user);
   if (!req.session.user) {
     return res.json({ success: false, user: null });
   }
@@ -1047,6 +1119,55 @@ app.post("/api/budgets/bulk", async (req, res) => {
 });
 
 
+/* ------------------------------------------------
+   📊 부서별 예산 & 지출 합계 조회 API
+   GET /api/expenses/summary?deptId=1&year=2025
+------------------------------------------------ */
+app.get("/api/expenses/summary", async (req, res) => {
+  try {
+    const { deptId, year } = req.query;
+    if (!deptId || !year) {
+      return res.status(400).json({ success: false, message: "deptId, year 필요" });
+    }
+
+    // ✅ 최상위 계정(관) 가져오기
+    const [rootRows] = await pool.query(
+      `SELECT id 
+         FROM account_categories 
+        WHERE parent_id IS NULL AND level='관'
+        LIMIT 1`
+    );
+    if (rootRows.length === 0) {
+      return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
+    }
+    const rootCategoryId = rootRows[0].id;
+
+    // ✅ 예산 총액 (budgets)
+    const [[budgetRow]] = await pool.query(
+      `SELECT COALESCE(SUM(budget_amount),0) AS totalBudget
+         FROM budgets
+        WHERE dept_id=? AND year=? AND category_id=?`,
+      [deptId, year, rootCategoryId]
+    );
+
+    // ✅ 지출 총액 (expense_details)
+    const [[expenseRow]] = await pool.query(
+      `SELECT COALESCE(SUM(amount),0) AS totalExpense
+         FROM expense_details
+        WHERE dept_id=? AND year=?`,
+      [deptId, year]
+    );
+
+    res.json({
+      success: true,
+      totalBudget: budgetRow.totalBudget,
+      totalExpense: expenseRow.totalExpense,
+    });
+  } catch (err) {
+    console.error("❌ /api/expenses/summary 오류:", err);
+    res.status(500).json({ success: false, message: "조회 실패" });
+  }
+});
 
 
 
