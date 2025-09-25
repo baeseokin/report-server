@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: report-server
+  template:
+    metadata:
+      labels:
+        app: report-server
+    spec:
+      containers:
+        - name: report-server
+          image: baeseokin/report-server:0.3   # ✅ DockerHub에 푸시한 이미지
+          ports:
+            - containerPort: 3001
+          env:
+            # ✅ MariaDB 연결 정보 (K8s Service로 연결)
+            - name: DB_HOST
+              value: "mariadb-service"
+            - name: DB_PORT
+              value: "3306"
+            - name: DB_USER
+              value: "reportuser"
+            - name: DB_PASSWORD
+              value: "reportpass"
+            - name: DB_NAME
+              value: "reportdb"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: report-server
+spec:
+  selector:
+    app: report-server
+  ports:
+    - protocol: TCP
+      port: 3001
+      targetPort: 3001
+      nodePort: 30002   # <- NodePort 지정 (예: 30002)
+  type: NodePort
+

@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mariadb-deployment
+  labels:
+    app: mariadb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mariadb
+  template:
+    metadata:
+      labels:
+        app: mariadb
+    spec:
+      containers:
+        - name: mariadb
+          image: mariadb:11.4.2
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: "rootpassword"
+            - name: MYSQL_DATABASE
+              value: "reportdb"
+            - name: MYSQL_USER
+              value: "reportuser"
+            - name: MYSQL_PASSWORD
+              value: "reportpass"
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: mariadb-persistent-storage
+      volumes:
+        - name: mariadb-persistent-storage
+          persistentVolumeClaim:
+            claimName: mariadb-pvc
+
