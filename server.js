@@ -1177,6 +1177,46 @@ app.get("/api/expenses/summary", async (req, res) => {
 });
 
 
+/* ------------------------------------------------
+   📊 부서별 전체 예산/지출/잔액 조회 API
+   GET /api/budget-status?year=2025
+------------------------------------------------ */
+app.get("/api/budget-status", async (req, res) => {
+  try {
+    const year = req.query.year || new Date().getFullYear();
+
+    // ✅ 부서별 예산 & 지출 합계
+    const [rows] = await pool.query(
+      `
+      SELECT 
+          d.id AS dept_id,
+          d.dept_name,
+          COALESCE(b.budget_amount,0) as total_budget,
+          COALESCE(ev.expense_amount,0) as total_expense,
+          COALESCE(b.budget_amount,0) - COALESCE(ev.expense_amount,0) AS remaining_amount
+      FROM departments d
+      LEFT JOIN ( select b.id, b.dept_id, b.category_id , b.year , b.budget_amount  
+			      from budgets b 
+			      INNER JOIN account_categories ac 
+			      	 ON b.dept_id = ac.dept_id and ac.id = b.category_id and ac.parent_id is NULL
+			      where b.year = ?
+      ) b on d.id = b.dept_id
+	    LEFT JOIN ( select e.dept_id, COALESCE(sum(e.amount),0) as expense_amount 
+			      from expense_details e 
+			      where e.year = ?
+			      group by e.dept_id
+      ) ev on d.id = ev.dept_id
+      where d.parent_dept_id is not null 
+      `,
+      [year, year]
+    );
+
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ /api/budget-status 오류:", err);
+    res.status(500).json({ success: false, message: "예산 현황 조회 실패" });
+  }
+});
 
 
 /* ------------------------------------------------

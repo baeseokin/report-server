@@ -10,7 +10,7 @@ CREATE TABLE `approval_files` (
   `alias_name` varchar(255) DEFAULT NULL,
   `uploaded_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=31 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_history definition
@@ -26,7 +26,7 @@ CREATE TABLE `approval_history` (
   `approved_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
   KEY `request_id` (`request_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=97 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=111 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_items definition
@@ -42,7 +42,7 @@ CREATE TABLE `approval_items` (
   `amount` bigint(20) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `request_id` (`request_id`)
-) ENGINE=InnoDB AUTO_INCREMENT=59 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=69 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.approval_line definition
@@ -89,7 +89,7 @@ CREATE TABLE `approval_requests` (
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`)
-) ENGINE=InnoDB AUTO_INCREMENT=49 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=59 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.dept_approvers definition
@@ -141,6 +141,7 @@ CREATE TABLE `departments` (
   `parent_dept_id` int(11) DEFAULT NULL COMMENT '상위 부서 ID',
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  `dept_cd` varchar(10) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `fk_parent_dept` (`parent_dept_id`),
   CONSTRAINT `fk_parent_dept` FOREIGN KEY (`parent_dept_id`) REFERENCES `departments` (`id`) ON DELETE SET NULL
@@ -157,7 +158,7 @@ CREATE TABLE `role_access` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `role_id` (`role_id`,`menu_name`,`access_type`),
   CONSTRAINT `role_access_ibfk_1` FOREIGN KEY (`role_id`) REFERENCES `roles` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=28 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.user_roles definition
@@ -189,7 +190,7 @@ CREATE TABLE `account_categories` (
   KEY `fk_account_dept` (`dept_id`),
   CONSTRAINT `fk_account_dept` FOREIGN KEY (`dept_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE,
   CONSTRAINT `fk_account_parent` FOREIGN KEY (`parent_id`) REFERENCES `account_categories` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=26 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.budgets definition
@@ -199,15 +200,16 @@ CREATE TABLE `budgets` (
   `dept_id` int(11) NOT NULL COMMENT '부서 ID (FK)',
   `category_id` int(11) NOT NULL COMMENT 'account_categories.id 참조',
   `year` year(4) NOT NULL COMMENT '회계연도',
-  `budget_amount` decimal(15,2) NOT NULL COMMENT '예산 금액',
+  `budget_amount` decimal(15,0) NOT NULL COMMENT '예산 금액',
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_budgets` (`dept_id`,`category_id`,`year`),
   KEY `fk_budget_dept` (`dept_id`),
   KEY `fk_budget_category` (`category_id`),
   CONSTRAINT `fk_budget_category` FOREIGN KEY (`category_id`) REFERENCES `account_categories` (`id`),
   CONSTRAINT `fk_budget_dept` FOREIGN KEY (`dept_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=86 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
 
 
 -- reportdb.expense_details definition
@@ -216,146 +218,18 @@ CREATE TABLE `expense_details` (
   `id` int(11) NOT NULL AUTO_INCREMENT COMMENT '지출내역 ID',
   `dept_id` int(11) NOT NULL COMMENT '부서 ID',
   `category_id` int(11) NOT NULL COMMENT '회계 카테고리 ID (관/항/목/세목)',
-  `budget_id` int(11) DEFAULT NULL COMMENT '참조 예산 ID (선택)',
+  `year` year(4) NOT NULL COMMENT '회계연도',
   `expense_date` date NOT NULL COMMENT '지출일자',
-  `amount` decimal(15,2) NOT NULL COMMENT '지출 금액',
+  `amount` decimal(15,0) NOT NULL COMMENT '지출 금액',
   `description` varchar(255) DEFAULT NULL COMMENT '지출 내역 설명',
   `created_at` timestamp NULL DEFAULT current_timestamp() COMMENT '생성일시',
   `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp() COMMENT '수정일시',
+  `approval_request_id` int(11) DEFAULT NULL COMMENT '결재요청 ID',
   PRIMARY KEY (`id`),
   KEY `idx_expense_dept` (`dept_id`),
   KEY `idx_expense_category` (`category_id`),
-  KEY `idx_expense_budget` (`budget_id`),
-  CONSTRAINT `fk_expense_budget` FOREIGN KEY (`budget_id`) REFERENCES `budgets` (`id`) ON DELETE SET NULL,
+  KEY `fk_expense_approval` (`approval_request_id`),
+  CONSTRAINT `fk_expense_approval` FOREIGN KEY (`approval_request_id`) REFERENCES `approval_requests` (`id`) ON DELETE SET NULL,
   CONSTRAINT `fk_expense_category` FOREIGN KEY (`category_id`) REFERENCES `account_categories` (`id`),
   CONSTRAINT `fk_expense_department` FOREIGN KEY (`dept_id`) REFERENCES `departments` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
-
-
-
--- reportdb.account_categories_hierarchy_view source
-
-CREATE OR REPLACE
-ALGORITHM = UNDEFINED VIEW `account_categories_hierarchy_view` AS with recursive category_hierarchy as (
-select
-    `ac`.`id` AS `id`,
-    `ac`.`dept_id` AS `dept_id`,
-    `ac`.`category_name` AS `category_name`,
-    `ac`.`level` AS `level`,
-    `ac`.`parent_id` AS `parent_id`,
-    `ac`.`valid_from` AS `valid_from`,
-    `ac`.`valid_to` AS `valid_to`,
-    cast(`ac`.`category_name` as char(500) charset utf8mb4) AS `full_path`,
-    1 AS `depth`
-from
-    `account_categories` `ac`
-where
-    `ac`.`parent_id` is null
-union all
-select
-    `child`.`id` AS `id`,
-    `child`.`dept_id` AS `dept_id`,
-    `child`.`category_name` AS `category_name`,
-    `child`.`level` AS `level`,
-    `child`.`parent_id` AS `parent_id`,
-    `child`.`valid_from` AS `valid_from`,
-    `child`.`valid_to` AS `valid_to`,
-    concat(`ch`.`full_path`, ' > ', `child`.`category_name`) AS `full_path`,
-    `ch`.`depth` + 1 AS `depth`
-from
-    (`account_categories` `child`
-join `category_hierarchy` `ch` on
-    (`child`.`parent_id` = `ch`.`id`))
-)select
-    `d`.`dept_name` AS `dept_name`,
-    `ch`.`id` AS `category_id`,
-    `ch`.`category_name` AS `category_name`,
-    `ch`.`level` AS `category_level`,
-    `ch`.`parent_id` AS `parent_id`,
-    `ch`.`valid_from` AS `valid_from`,
-    `ch`.`valid_to` AS `valid_to`,
-    `ch`.`full_path` AS `full_path`,
-    `ch`.`depth` AS `depth`,
-    `ch`.`dept_id` AS `dept_id`
-from
-    (`category_hierarchy` `ch`
-join `departments` `d` on
-    (`d`.`id` = `ch`.`dept_id`))
-order by
-    `ch`.`parent_id`,
-    `ch`.`id`;
-
-
--- reportdb.budgets_view source
-
-CREATE OR REPLACE
-ALGORITHM = UNDEFINED VIEW `budgets_view` AS
-select
-    `b`.`id` AS `budget_id`,
-    `b`.`year` AS `year`,
-    `b`.`budget_amount` AS `budget_amount`,
-    `d`.`id` AS `dept_id`,
-    `d`.`dept_name` AS `dept_name`,
-    `ac`.`id` AS `category_id`,
-    `ac`.`category_name` AS `category_name`,
-    `ac`.`level` AS `category_level`,
-    `ac`.`parent_id` AS `parent_id`,
-    `ac`.`valid_from` AS `valid_from`,
-    `ac`.`valid_to` AS `valid_to`,
-    coalesce(sum(`e`.`amount`), 0) AS `used_amount`,
-    `b`.`budget_amount` - coalesce(sum(`e`.`amount`), 0) AS `remaining_amount`,
-    `b`.`created_at` AS `created_at`,
-    `b`.`updated_at` AS `updated_at`
-from
-    (((`budgets` `b`
-join `departments` `d` on
-    (`b`.`dept_id` = `d`.`id`))
-join `account_categories` `ac` on
-    (`b`.`category_id` = `ac`.`id` and `b`.`dept_id` = `ac`.`dept_id`))
-left join `expense_details` `e` on
-    (`e`.`budget_id` = `b`.`id` and `e`.`dept_id` = `b`.`dept_id` and `e`.`category_id` = `b`.`category_id`))
-group by
-    `b`.`id`,
-    `b`.`year`,
-    `b`.`budget_amount`,
-    `d`.`id`,
-    `d`.`dept_name`,
-    `ac`.`id`,
-    `ac`.`category_name`,
-    `ac`.`level`,
-    `ac`.`parent_id`,
-    `ac`.`valid_from`,
-    `ac`.`valid_to`,
-    `b`.`created_at`,
-    `b`.`updated_at`;
-
-
--- reportdb.expenses_view source
-
-CREATE OR REPLACE
-ALGORITHM = UNDEFINED VIEW `expenses_view` AS
-select
-    `e`.`id` AS `expense_id`,
-    `e`.`expense_date` AS `expense_date`,
-    `e`.`amount` AS `amount`,
-    `e`.`description` AS `description`,
-    `d`.`id` AS `dept_id`,
-    `d`.`dept_name` AS `dept_name`,
-    `ac`.`id` AS `category_id`,
-    `ac`.`category_name` AS `category_name`,
-    `ac`.`level` AS `category_level`,
-    `ac`.`parent_id` AS `parent_id`,
-    `ac`.`valid_from` AS `valid_from`,
-    `ac`.`valid_to` AS `valid_to`,
-    `b`.`year` AS `budget_year`,
-    `b`.`budget_amount` AS `budget_amount`,
-    `e`.`created_at` AS `created_at`,
-    `e`.`updated_at` AS `updated_at`
-from
-    (((`expense_details` `e`
-join `departments` `d` on
-    (`e`.`dept_id` = `d`.`id`))
-join `account_categories` `ac` on
-    (`e`.`category_id` = `ac`.`id` and `e`.`dept_id` = `ac`.`dept_id`))
-left join `budgets` `b` on
-    (`e`.`budget_id` = `b`.`id` and `e`.`dept_id` = `b`.`dept_id` and `e`.`category_id` = `b`.`category_id`));
+) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_uca1400_ai_ci;
