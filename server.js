@@ -147,6 +147,7 @@ app.post("/api/approval", async (req, res) => {
     );
 
     const requestId = result.insertId;
+    console.log("approval > requestId :", requestId);
 
     // ✅ 신청자의 approver_order 찾기
     const [applicantRows] = await conn.query(
@@ -156,6 +157,10 @@ app.post("/api/approval", async (req, res) => {
         LIMIT 1`,
       [deptName, author]
     );
+
+    console.log("approval > deptName :", deptName);
+    console.log("approval > author :", author);
+    console.log("approval > applicantRows :", applicantRows);
 
     let nextApprover = null;
 
@@ -173,6 +178,8 @@ app.post("/api/approval", async (req, res) => {
         nextApprover = nextRows[0];
       }
     }
+
+    console.log("approval > nextApprover :", nextApprover);
 
     // ✅ approval_requests에 다음 결재자 업데이트
     if (nextApprover) {
