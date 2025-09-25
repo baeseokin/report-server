@@ -23,4 +23,5 @@ INSERT INTO reportdb.account_categories (dept_id,parent_id,`level`,category_name
 INSERT INTO reportdb.account_categories (dept_id,parent_id,`level`,category_name,valid_from,valid_to,created_at,updated_at) VALUES
 	 (3,15,'목','운영비','2025-09-23',NULL,'2025-09-23 11:42:00','2025-09-23 11:45:14'),
 	 (3,21,'세목','행사','2025-09-23',NULL,'2025-09-23 11:42:02','2025-09-23 11:45:14'),
-	 (5,2,'목','지정기탁헌금','2025-09-23',NULL,'2025-09-23 13:27:54','2025-09-23 13:27:54');
+	 (5,2,'목','지정기탁헌금','2025-09-23',NULL,'2025-09-23 13:27:54','2025-09-23 13:27:54'),
+	 (5,23,'세목','지정기탁헌금','2025-09-24',NULL,'2025-09-24 07:54:33','2025-09-24 07:54:33');
