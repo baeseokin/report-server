@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mariadb-service
+spec:
+  selector:
+    app: mariadb
+  ports:
+    - protocol: TCP
+      port: 3306       # 클러스터 내부에서 접근할 포트
+      targetPort: 3306 # 컨테이너 내부 DB 포트
+      nodePort: 32006  # 외부에서 접속할 포트 (쿠버네티스 노드IP:32006)
+  type: NodePort
+
