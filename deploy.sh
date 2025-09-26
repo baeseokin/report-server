@@ -37,6 +37,6 @@ echo "📡 Kubernetes 배포 업데이트..."
 kubectl set image deployment/report-server report-server=$IMAGE_NAME:$VERSION
 
 # 5. 롤아웃 확인
-kubectl rollout status deployment/report-server
+kubectl rollout status deployment/report-server  -n tomcat-test
 
 echo "✅ report-server 배포 완료!"
