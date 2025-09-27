@@ -89,7 +89,7 @@ app.get("/api/expenses/summary", async (req, res) => {
 
     // ✅ 최상위 계정(관) 가져오기
     const [rootRows] = await pool.query(
-      `SELECT id 
+      `SELECT id, category_id 
          FROM account_categories 
         WHERE parent_id IS NULL AND level='관'
         LIMIT 1`
@@ -97,7 +97,7 @@ app.get("/api/expenses/summary", async (req, res) => {
     if (rootRows.length === 0) {
       return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
     }
-    const rootCategoryId = rootRows[0].id;
+    const rootCategoryId = rootRows[0].category_id;
 
     // ✅ 예산 총액 (budgets)
     const [[budgetRow]] = await pool.query(
