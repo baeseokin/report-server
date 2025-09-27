@@ -8,14 +8,16 @@ const fs = require("fs");
 const session = require("express-session");
 const bcrypt = require("bcrypt");
 require("dotenv").config();   // ✅ .env 불러오기
+const { envPick, envNumber, ENV } = require("./env");
 
 const app = express();
 const PORT = 3001;
 
 // ✅ CORS 설정 (.env 기반)
-const allowedOrigins = process.env.CORS_ORIGIN
-  ? process.env.CORS_ORIGIN.split(",").map(o => o.trim())
-  : [];
+const allowedOrigins = (envPick("CORS_ORIGIN", "") || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
 app.use(cors({
   origin: function (origin, callback) {
@@ -35,7 +37,7 @@ app.use(cors({
 app.use(bodyParser.json());
 app.use(
   session({
-    secret: "secret-key",
+    secret: envPick("SESSION_SECRET", "secret-key"),
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -48,13 +50,16 @@ app.use(
 
 // ✅ DB 연결 설정
 const pool = mysql.createPool({
-  host: "mariadb-service",
-  //host: "localhost",
-  port: 3306,
-  //port: 32006,
-  user: "reportuser",
-  password: "reportpass",
-  database: "reportdb",
+  host: envPick("DB_HOST", "localhost"),
+  port: envNumber("DB_PORT", 3306),
+  user: envPick("DB_USER", "root"),
+  password: envPick("DB_PASSWORD", ""),
+  database: envPick("DB_NAME", "test"),
+  waitForConnections: true,
+  connectionLimit: envNumber("DB_CONN_LIMIT", 10),
+  queueLimit: 0,
+  dateStrings: true,
+  timezone: envPick("DB_TIMEZONE", "Z")
 });
 
 // 업로드 폴더 생성
@@ -490,7 +495,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
       // ✅ 최상위 계정(category_id: 관) 찾기
       const [[categoryRow]] = await conn.query(
-        `SELECT id FROM account_categories 
+        `SELECT id, category_id FROM account_categories 
           WHERE dept_id=? AND parent_id IS NULL 
           ORDER BY id LIMIT 1`,
         [deptRow.id]
@@ -503,7 +508,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
            VALUES (?, ?, YEAR(CURDATE()), CURDATE(), ?, ?, ?)`,
           [
             deptRow.id,
-            categoryRow.id,
+            categoryRow.category_id,
             totalAmount,
             `결재 ID ${requestId} 최종 승인 합계`,
             requestId
@@ -962,7 +967,7 @@ app.delete("/api/access/:roleId", async (req, res) => {
 // 부서 목록 조회
 app.get("/api/departments", async (req, res) => {
   try {
-    const [rows] = await pool.query("SELECT id, dept_name FROM departments ORDER BY id");
+    const [rows] = await pool.query("SELECT id, dept_name, dept_cd FROM departments ORDER BY id");
     res.json(rows);
   } catch (err) {
     console.error("부서 조회 실패:", err);
@@ -982,7 +987,7 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
     const { date } = req.query;
 
     let query = `
-      SELECT id, dept_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
+      SELECT id, category_id, dept_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
         FROM account_categories
        WHERE dept_id = ?
     `;
@@ -994,7 +999,7 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
       params.push(date, date);
     }
 
-    query += ` ORDER BY parent_id, id`;
+    query += ` ORDER BY category_id`;
 
     const [rows] = await pool.query(query, params);
 
@@ -1008,11 +1013,11 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
 // 계정과목 추가
 app.post("/api/accountCategories", async (req, res) => {
   try {
-    const { dept_id, parent_id, category_name, level, valid_from, valid_to } = req.body;
+    const { category_id, dept_id, parent_id, category_name, level, valid_from} = req.body;
     const [result] = await pool.query(
-      `INSERT INTO account_categories (dept_id, parent_id, category_name, level, valid_from, valid_to)
+      `INSERT INTO account_categories (category_id, dept_id, parent_id, category_name, level, valid_from)
        VALUES (?, ?, ?, ?, ?, ?)`,
-      [dept_id, parent_id || null, category_name, level, valid_from || new Date(), valid_to || null]
+      [category_id, dept_id, parent_id || null, category_name, level, valid_from || new Date()]
     );
     res.json({ success: true, id: result.insertId });
   } catch (err) {
@@ -1027,9 +1032,9 @@ app.put("/api/accountCategories/:id", async (req, res) => {
     const { category_name, level, parent_id, valid_from, valid_to } = req.body;
     await pool.query(
       `UPDATE account_categories 
-          SET category_name=?, level=?, parent_id=?, valid_from=?, valid_to=?, updated_at=NOW()
+          SET category_name=?, updated_at=NOW()
         WHERE id=?`,
-      [category_name, level, parent_id || null, valid_from, valid_to, req.params.id]
+      [category_name, req.params.id]
     );
     res.json({ success: true });
   } catch (err) {
@@ -1198,7 +1203,7 @@ app.get("/api/budget-status", async (req, res) => {
       LEFT JOIN ( select b.id, b.dept_id, b.category_id , b.year , b.budget_amount  
 			      from budgets b 
 			      INNER JOIN account_categories ac 
-			      	 ON b.dept_id = ac.dept_id and ac.id = b.category_id and ac.parent_id is NULL
+			      	 ON b.dept_id = ac.dept_id and ac.category_id = b.category_id and ac.parent_id is NULL
 			      where b.year = ?
       ) b on d.id = b.dept_id
 	    LEFT JOIN ( select e.dept_id, COALESCE(sum(e.amount),0) as expense_amount 
