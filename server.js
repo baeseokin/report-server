@@ -638,29 +638,38 @@ app.get("/api/approval/:id/files", async (req, res) => {
   }
 });
 
+// 안전하게 file_path 기준으로 찾기
 app.get("/api/files/:filename", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
+
   const filename = req.params.filename;
   try {
-    let filePath = path.join(uploadDir, filename);
-    if (fs.existsSync(filePath)) return res.sendFile(filePath);
+    const filePath = path.join(uploadDir, filename);
+    if (fs.existsSync(filePath)) {
+      return res.sendFile(filePath);
+    }
 
+    // 🔑 DB 조회도 file_path 기준으로!
     const [rows] = await pool.query(
-      "SELECT file_path FROM approval_files WHERE file_name = ? LIMIT 1",
+      "SELECT file_path FROM approval_files WHERE file_path = ? LIMIT 1",
       [filename]
     );
     if (rows.length > 0) {
       const dbFilePath = path.join(uploadDir, rows[0].file_path);
-      if (fs.existsSync(dbFilePath)) return res.sendFile(dbFilePath);
+      if (fs.existsSync(dbFilePath)) {
+        return res.sendFile(dbFilePath);
+      }
     }
+
     return res.status(404).json({ error: "File not found" });
   } catch (err) {
     console.error("❌ File Fetch Error:", err);
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 /* ------------------------------------------------
    ✅ 로그인/로그아웃/세션
