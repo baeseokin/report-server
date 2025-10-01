@@ -743,17 +743,24 @@ app.get("/api/session", (req, res) => {
 /* ------------------------------------------------
    ✅ 사용자 관리
 ------------------------------------------------ */
-/* ------------------------------------------------
-   ✅ 사용자 API (CRUD)
------------------------------------------------- */
-// ✅ 사용자 검색 API
+// ✅ 사용자 검색 API (roleIds/roleNames 동시 제공)
 app.get("/api/users/search", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
   const { dept, role, name } = req.query;
 
   let query = `
-    SELECT u.id, u.user_id AS userId, u.user_name AS name, u.email, u.phone, 
-           u.dept_name AS dept,
-           GROUP_CONCAT(r.id) AS roles
+    SELECT 
+      u.id, 
+      u.user_id AS userId, 
+      u.user_name AS name, 
+      u.email, 
+      u.phone, 
+      u.dept_name AS dept,
+      GROUP_CONCAT(DISTINCT r.id) AS roleIds,
+      GROUP_CONCAT(DISTINCT r.role_name) AS roleNames
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN roles r ON ur.role_id = r.id
@@ -766,8 +773,14 @@ app.get("/api/users/search", async (req, res) => {
     params.push(`%${dept}%`);
   }
   if (role) {
-    query += " AND r.role_name = ?";
-    params.push(role);
+    // 숫자면 role_id로, 아니면 role_name으로 필터
+    if (/^\\d+$/.test(role)) {
+      query += " AND r.id = ?";
+      params.push(Number(role));
+    } else {
+      query += " AND r.role_name = ?";
+      params.push(role);
+    }
   }
   if (name) {
     query += " AND u.user_name LIKE ?";
@@ -781,11 +794,11 @@ app.get("/api/users/search", async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error("검색 실패:", err);
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: "검색 중 오류가 발생했습니다." });
   }
 });
 
-// ✅ 사용자 목록 조회 (roles, dept_name alias 포함)
+// ✅ 사용자 목록 조회 (roleIds/roleNames 모두 제공)
 app.get("/api/users", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
@@ -793,9 +806,10 @@ app.get("/api/users", async (req, res) => {
 
   try {
     const [rows] = await pool.query(`
-      SELECT u.id, u.user_id AS userId, u.user_name AS name, u.email, u.phone, 
-             u.dept_name AS dept,
-             GROUP_CONCAT(r.role_name) AS roles
+      SELECT 
+        u.id, u.user_id AS userId, u.user_name AS name, u.email, u.phone, u.dept_name AS dept,
+        GROUP_CONCAT(DISTINCT r.id) AS roleIds,
+        GROUP_CONCAT(DISTINCT r.role_name) AS roleNames
       FROM users u
       LEFT JOIN user_roles ur ON u.id = ur.user_id
       LEFT JOIN roles r ON ur.role_id = r.id
@@ -804,105 +818,180 @@ app.get("/api/users", async (req, res) => {
     res.json(rows);
   } catch (err) {
     console.error("사용자 조회 실패:", err);
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: "조회 중 오류가 발생했습니다." });
   }
 });
 
-// ✅ 사용자 등록
+
+// ✅ 사용자 등록 (roles: ID 배열 권장, 이름 배열도 허용) + 트랜잭션
 app.post("/api/users", async (req, res) => {
-  if (!req.session.user) return res.status(401).json({ success: false });
+  if (!req.session.user) return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
 
   const { userId, name, email, phone, dept, password, roles } = req.body;
 
+  const conn = await pool.getConnection();
   try {
-    const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
+    await conn.beginTransaction();
+
+    // user_id 중복 체크
+    const [dup] = await conn.query("SELECT 1 FROM users WHERE user_id=?", [userId]);
+    if (dup.length > 0) {
+      await conn.rollback();
+      return res.status(409).json({ success: false, message: "이미 존재하는 사용자ID입니다." });
+    }
+
+    // ✅ 비밀번호 규칙 (영문/숫자/모든 특수문자 포함, 7자 이상)
+    const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{7,}$/;
     if (!regex.test(password)) {
-      return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
+      await conn.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "비밀번호 규칙 위반(영문/숫자/특수문자 포함, 7자 이상)",
+      });
     }
 
     const hash = await bcrypt.hash(password, 10);
-    const [result] = await pool.query(
+    const [result] = await conn.query(
       "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
       [userId, name, email, phone, dept, hash]
     );
-
     const insertedUserId = result.insertId;
 
-    if (roles && roles.length > 0) {
-      for (const roleName of roles) {
-        const [roleRow] = await pool.query("SELECT id FROM roles WHERE role_name=?", [roleName]);
-        if (roleRow.length > 0) {
-          await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
-            insertedUserId,
-            roleRow[0].id,
-          ]);
-        }
+    // ✅ roles 처리: ID 배열 우선, 이름 배열도 허용(혼합 가능)
+    let roleIds = Array.isArray(roles) ? roles.slice() : [];
+    if (roleIds.length > 0) {
+      const numeric = roleIds.filter(r => /^\d+$/.test(String(r))).map(r => Number(r));
+      const nonNumeric = roleIds.filter(r => !/^\d+$/.test(String(r)));
+
+      // 이름으로 온 것들 id 매핑
+      if (nonNumeric.length > 0) {
+        const placeholders = nonNumeric.map(() => "?").join(",");
+        const [rrows] = await conn.query(
+          `SELECT id FROM roles WHERE role_name IN (${placeholders})`,
+          nonNumeric
+        );
+        const mapped = rrows.map(r => r.id);
+        roleIds = [...numeric, ...mapped];
+      } else {
+        roleIds = numeric;
+      }
+
+      if (roleIds.length > 0) {
+        const values = roleIds.map(rid => [insertedUserId, rid]);
+        await conn.query("INSERT INTO user_roles (user_id, role_id) VALUES ?", [values]);
       }
     }
 
-    res.json({ success: true });
+    await conn.commit();
+    res.json({ success: true, id: insertedUserId });
   } catch (err) {
+    await conn.rollback();
     console.error("사용자 등록 실패:", err);
-    res.status(500).json({ success: false });
+    if (err && err.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ success: false, message: "이미 존재하는 사용자ID입니다." });
+    }
+    res.status(500).json({ success: false, message: "등록 중 오류가 발생했습니다." });
+  } finally {
+    conn.release();
   }
 });
 
-// ✅ 사용자 수정 (비밀번호 변경 포함)
-app.put("/api/users/:id", async (req, res) => {
-  const { name, email, phone, dept, roles, newPassword } = req.body;
 
+// ✅ 사용자 수정 (비밀번호 변경 포함) + 트랜잭션
+app.put("/api/users/:id", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { name, email, phone, dept, roles, newPassword } = req.body;
+  const userId = req.params.id;
+
+  const conn = await pool.getConnection();
   try {
-    // 1. 기본 사용자 정보 업데이트
-    await pool.query(
+    await conn.beginTransaction();
+
+    // 1) 기본 정보
+    await conn.query(
       "UPDATE users SET user_name=?, email=?, phone=?, dept_name=? WHERE id=?",
-      [name, email, phone, dept, req.params.id]
+      [name, email, phone, dept, userId]
     );
 
-    // 2. 비밀번호 변경 처리 (선택적)
+    // 2) 비밀번호 (선택) — 모든 특수문자 허용 + 7자 이상
     if (newPassword && newPassword.trim() !== "") {
-      const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[!@#$%^&*]).{7,}$/;
+      const regex = /^(?=.*[A-Za-z])(?=.*\d)(?=.*[^A-Za-z0-9]).{7,}$/;
       if (!regex.test(newPassword)) {
-        return res.status(400).json({ success: false, message: "비밀번호 규칙 위반" });
+        await conn.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "비밀번호 규칙 위반(영문/숫자/특수문자 포함, 7자 이상)",
+        });
       }
-
       const hash = await bcrypt.hash(newPassword, 10);
-      await pool.query(
-        "UPDATE users SET password_hash=? WHERE id=?",
-        [hash, req.params.id]
-      );
+      await conn.query("UPDATE users SET password_hash=? WHERE id=?", [hash, userId]);
     }
 
-    console.log("roles :", roles);
+    // 3) 역할 갱신 (전체 삭제 후 재삽입)
+    await conn.query("DELETE FROM user_roles WHERE user_id=?", [userId]);
 
-    // 3. 역할 갱신
-    await pool.query("DELETE FROM user_roles WHERE user_id=?", [req.params.id]);
-    if (roles && Array.isArray(roles)) {
-      for (const roleId of roles) {
-        await pool.query("INSERT INTO user_roles (user_id, role_id) VALUES (?, ?)", [
-          req.params.id,
-          roleId,
-        ]);
+    if (roles && Array.isArray(roles) && roles.length > 0) {
+      let roleIds = roles.slice();
+
+      const numeric = roleIds.filter(r => /^\d+$/.test(String(r))).map(r => Number(r));
+      const nonNumeric = roleIds.filter(r => !/^\d+$/.test(String(r)));
+
+      if (nonNumeric.length > 0) {
+        const placeholders = nonNumeric.map(() => "?").join(",");
+        const [rrows] = await conn.query(
+          `SELECT id FROM roles WHERE role_name IN (${placeholders})`,
+          nonNumeric
+        );
+        const mapped = rrows.map(r => r.id);
+        roleIds = [...numeric, ...mapped];
+      } else {
+        roleIds = numeric;
+      }
+
+      if (roleIds.length > 0) {
+        const values = roleIds.map(rid => [userId, rid]);
+        await conn.query("INSERT INTO user_roles (user_id, role_id) VALUES ?", [values]);
       }
     }
 
+    await conn.commit();
     res.json({ success: true });
   } catch (err) {
+    await conn.rollback();
     console.error("사용자 수정 실패:", err);
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: "업데이트 중 오류가 발생했습니다." });
+  } finally {
+    conn.release();
   }
 });
 
-
-// ✅ 사용자 삭제
+// ✅ 사용자 삭제 (FK 대비: user_roles 먼저 삭제) + 트랜잭션
 app.delete("/api/users/:id", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const userId = req.params.id;
+  const conn = await pool.getConnection();
   try {
-    await pool.query("DELETE FROM users WHERE id=?", [req.params.id]);
+    await conn.beginTransaction();
+    await conn.query("DELETE FROM user_roles WHERE user_id=?", [userId]);
+    await conn.query("DELETE FROM users WHERE id=?", [userId]);
+    await conn.commit();
     res.json({ success: true });
   } catch (err) {
+    await conn.rollback();
     console.error("사용자 삭제 실패:", err);
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: "삭제 중 오류가 발생했습니다." });
+  } finally {
+    conn.release();
   }
 });
+
+
 
 
 /* ------------------------------------------------
