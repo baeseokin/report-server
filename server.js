@@ -21,12 +21,12 @@ const allowedOrigins = (envPick("CORS_ORIGIN", "") || "")
 
 app.use(cors({
   origin: function (origin, callback) {
-    console.log("🌍 요청 Origin:", origin); 
+    //console.log("🌍 요청 Origin:", origin); 
     // 개발용: origin 없을 때 (예: Postman) 허용
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      console.warn("❌ CORS 차단:", origin);
+      //console.warn("❌ CORS 차단:", origin);
       callback(new Error("CORS not allowed: " + origin));
     }
   },
@@ -152,7 +152,7 @@ app.post("/api/approval", async (req, res) => {
     );
 
     const requestId = result.insertId;
-    console.log("approval > requestId :", requestId);
+    //console.log("approval > requestId :", requestId);
 
     // ✅ 신청자의 approver_order 찾기
     const [applicantRows] = await conn.query(
@@ -163,9 +163,9 @@ app.post("/api/approval", async (req, res) => {
       [deptName, userId]
     );
 
-    console.log("approval > deptName :", deptName);
-    console.log("approval > userId :", userId);
-    console.log("approval > applicantRows :", applicantRows);
+    //console.log("approval > deptName :", deptName);
+    //console.log("approval > userId :", userId);
+    //console.log("approval > applicantRows :", applicantRows);
 
     let nextApprover = null;
 
@@ -184,7 +184,7 @@ app.post("/api/approval", async (req, res) => {
       }
     }
 
-    console.log("approval > nextApprover :", nextApprover);
+    //console.log("approval > nextApprover :", nextApprover);
 
     // ✅ approval_requests에 다음 결재자 업데이트
     if (nextApprover) {
@@ -328,7 +328,7 @@ app.post("/api/approvalList", async (req, res) => {
       params
     );
 
-    console.log("where :", where);
+    //console.log("where :", where);
 
     const totalPages = Math.ceil(count / pageSize);
     const offset = (page - 1) * pageSize;
@@ -692,7 +692,7 @@ app.post("/api/login", async (req, res) => {
 
       const user = rows[0];
 
-      console.log("user:", user);
+      //console.log("user:", user);
 
       const match = await bcrypt.compare(password, user.password_hash);
       if (!match) {
@@ -717,7 +717,7 @@ app.post("/api/login", async (req, res) => {
         roles: roles.length > 0 ? roles : [],
       };
       console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
-      console.log("✅ req.session.user :", req.session.user );
+      //console.log("✅ req.session.user :", req.session.user );
       res.json({ success: true, user: req.session.user });
 
   } catch (error) {
@@ -733,7 +733,7 @@ app.post("/api/logout", (req, res) => {
 });
 
 app.get("/api/session", (req, res) => {
-  console.log("req.session.user :", req.session.user);
+  //console.log("req.session.user :", req.session.user);
   if (!req.session.user) {
     return res.json({ success: false, user: null });
   }
