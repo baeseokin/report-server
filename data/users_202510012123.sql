@@ -3,4 +3,5 @@ INSERT INTO reportdb.users (user_id,user_name,email,phone,dept_name,password_has
 	 ('user02','배석인','','','원천엔젤스','$2b$10$RdUwLN765Y/.TwU5reKSI.AsnMFD4F0xUDnePgxY8nficBw5inJrC','2025-09-04 12:49:28'),
 	 ('user03','김개욱','2222@ee.com','','음악부','$2b$10$ous4ef/ISKhaiqa08hwpfOIOYveBa9s/6Yo0RkTbBpc/grKJsuu3O','2025-09-05 12:20:09'),
 	 ('user04','이종민','','','음악부','$2b$10$HyUcMFCuyTL5T2TLb6QY/eVHssikD3RSJQ2yd/f5JGbuWThogsrOa','2025-09-05 12:20:49'),
-	 ('user05','재정부','','','재정부','$2b$10$Kt6.tcqzEDaid95P2MApmuMczv.MEtlpGH11aisgRrMi1IIE4pMqi','2025-09-05 14:01:21');
+	 ('user05','재정부','','','재정부','$2b$10$0LtEbPZD5n1fix3/Lm3SnOD7gM4ikY1WxMMH8A8oaxSmWukZ7nKvq','2025-09-05 14:01:21'),
+	 ('user06','음악부회계','',NULL,'음악부','$2b$10$O6MdOERMuGb29bs8Taz2f.0WP5Z3LGWB05hEgkffgR86oHnAsS8Cm','2025-10-01 11:48:31');
