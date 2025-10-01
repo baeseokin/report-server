@@ -140,7 +140,7 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { documentType, deptName, author, date, totalAmount, comment, aliasName, items } =
+    const { documentType, deptName, author, userId, date, totalAmount, comment, aliasName, items } =
       req.body;
 
     // approval_requests 저장 (status = 진행중)
@@ -158,13 +158,13 @@ app.post("/api/approval", async (req, res) => {
     const [applicantRows] = await conn.query(
       `SELECT approver_order 
          FROM dept_approvers 
-        WHERE dept_name = ? AND approver_name = ? AND is_active = 1 
+        WHERE dept_name = ? AND approver_user_id = ? AND is_active = 1 
         LIMIT 1`,
-      [deptName, author]
+      [deptName, userId]
     );
 
     console.log("approval > deptName :", deptName);
-    console.log("approval > author :", author);
+    console.log("approval > userId :", userId);
     console.log("approval > applicantRows :", applicantRows);
 
     let nextApprover = null;
@@ -172,7 +172,7 @@ app.post("/api/approval", async (req, res) => {
     if (applicantRows.length > 0) {
       const applicantOrder = applicantRows[0].approver_order;
       const [nextRows] = await conn.query(
-        `SELECT role, approver_name 
+        `SELECT role, approver_user_id 
            FROM dept_approvers 
           WHERE dept_name = ? AND approver_order = ? AND is_active = 1 
           LIMIT 1`,
@@ -190,9 +190,9 @@ app.post("/api/approval", async (req, res) => {
     if (nextApprover) {
       await conn.query(
         `UPDATE approval_requests 
-            SET current_approver_role = ?, current_approver_name = ? 
+            SET current_approver_role = ?, current_approver_user_id = ? 
           WHERE id = ?`,
-        [nextApprover.role, nextApprover.approver_name, requestId]
+        [nextApprover.role, nextApprover.approver_user_id, requestId]
       );
     }
     // ❌ else 제거 → 자동 완료 금지
@@ -236,17 +236,17 @@ app.post("/api/approval/history", upload.single("signature"), async (req, res) =
   }
 
   try {
-    const { requestId, approver_role, approver_name, comment } = req.body;
+    const { requestId, approver_role, approver_user_id, comment } = req.body;
     const signaturePath = req.file ? req.file.filename : null;
 
-    if (!requestId || !approver_name) {
+    if (!requestId || !approver_user_id) {
       return res.status(400).json({ success: false, message: "필수 값 누락" });
     }
 
     await pool.query(
-      `INSERT INTO approval_history (request_id, approver_role, approver_name, comment, signature_path, approved_at)
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [requestId, approver_role, approver_name, comment, signaturePath]
+      `INSERT INTO approval_history (request_id, approver_role, approver_user_id, comment, signature_path, approved_at)
+       VALUES (?, ?, ?, ?, ?, CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
+      [requestId, approver_role, approver_user_id, comment, signaturePath]
     );
 
     res.json({ success: true });
@@ -267,14 +267,15 @@ app.post("/api/approvalList", async (req, res) => {
   }
 
   try {
-    const { deptName, documentType, startDate, endDate, status, approverName,page = 1, pageSize = 10 } = req.body;
+    const { deptName, documentType, startDate, endDate, status, approverUserId, page = 1, pageSize = 10 } = req.body;
 
     let where = "WHERE 1=1";
     const params = [];
 
     // ✅ 현재 부서 + 하위부서 조회
     let deptList = [];
-    if (deptName) {
+    const effectiveDeptName = deptName === "재정부" ? "교회" : deptName;
+    if (effectiveDeptName) {
       const [subDepts] = await pool.query(
         `WITH RECURSIVE sub_depts AS (
           SELECT id, dept_name, parent_dept_id
@@ -286,7 +287,7 @@ app.post("/api/approvalList", async (req, res) => {
           INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
         )
         SELECT dept_name FROM sub_depts`,
-        [deptName]
+        [effectiveDeptName]
       );
       deptList = subDepts.map(d => d.dept_name);
     }
@@ -296,11 +297,6 @@ app.post("/api/approvalList", async (req, res) => {
       params.push(...deptList);
     }
 
-
-    // if (deptName) {
-    //   where += " AND ar.dept_name LIKE ?";
-    //   params.push(`%${deptName}%`);
-    // }
     if (documentType) {
       where += " AND ar.document_type = ?";
       params.push(documentType);
@@ -322,9 +318,9 @@ app.post("/api/approvalList", async (req, res) => {
     }
 
     // ✅ 현재 결재자
-    if (approverName) {
-      where += " AND ar.current_approver_name = ?";
-      params.push(approverName);
+    if (approverUserId) {
+      where += " AND ar.current_approver_user_id = ?";
+      params.push(approverUserId);
     }
 
     const [[{ count }]] = await pool.query(
@@ -332,12 +328,14 @@ app.post("/api/approvalList", async (req, res) => {
       params
     );
 
+    console.log("where :", where);
+
     const totalPages = Math.ceil(count / pageSize);
     const offset = (page - 1) * pageSize;
 
     const [rows] = await pool.query(
       `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, 
-              ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_name
+              ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id
        FROM approval_requests ar
        ${where}
        ORDER BY ar.request_date DESC, ar.id DESC
@@ -384,7 +382,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
 
     // ✅ 결재 이력
     const [history] = await pool.query(
-      `SELECT approver_name, approver_role, comment, signature_path, approved_at, status
+      `SELECT approver_user_id, approver_role, comment, signature_path, approved_at, status
          FROM approval_history
         WHERE request_id = ?
         ORDER BY approved_at ASC`,
@@ -426,7 +424,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     await conn.beginTransaction();
 
     const [reqRows] = await conn.query(
-      `SELECT dept_name, current_approver_role, current_approver_name
+      `SELECT dept_name, current_approver_role, current_approver_user_id
          FROM approval_requests 
         WHERE id=? FOR UPDATE`,
       [requestId]
@@ -435,19 +433,19 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
       return res.status(404).json({ success: false, message: "결재 요청 없음" });
     }
 
-    const { dept_name, current_approver_role, current_approver_name } = reqRows[0];
+    const { dept_name, current_approver_role, current_approver_user_id } = reqRows[0];
 
     // ✅ 로그인한 사용자가 실제 결재자인지 검증
-    if (current_approver_name !== req.session.user.userName) {
+    if (current_approver_user_id !== req.session.user.userId) {
       return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
     }
 
     // ✅ 승인 이력 기록
     await conn.query(
       `INSERT INTO approval_history 
-         (request_id, approver_role, approver_name, comment, signature_path, status, approved_at)
+         (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
        VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
-      [requestId, current_approver_role, current_approver_name, comment, signaturePath]
+      [requestId, current_approver_role, current_approver_user_id, comment, signaturePath]
     );
 
     // ✅ 다음 결재자 찾기
@@ -458,7 +456,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     const currentOrder = roleRow.order_no;
 
     const [nextRows] = await conn.query(
-      `SELECT approver_role, approver_name 
+      `SELECT approver_role, approver_user_id
          FROM approval_line 
         WHERE dept_name=? AND order_no=?`,
       [dept_name, currentOrder + 1]
@@ -468,9 +466,9 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
       // 다음 결재자 지정
       await conn.query(
         `UPDATE approval_requests
-           SET current_approver_role=?, current_approver_name=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
+           SET current_approver_role=?, current_approver_user_id=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
          WHERE id=?`,
-        [nextRows[0].approver_role, nextRows[0].approver_name, requestId]
+        [nextRows[0].approver_role, nextRows[0].approver_user_id, requestId]
       );
     } else {
       // 마지막 결재자 → 완료 처리
@@ -546,7 +544,7 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
     await conn.beginTransaction();
 
     const [reqRows] = await conn.query(
-      `SELECT current_approver_role, current_approver_name 
+      `SELECT current_approver_role, current_approver_user_id
          FROM approval_requests 
         WHERE id=? FOR UPDATE`,
       [requestId]
@@ -555,26 +553,26 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
       return res.status(404).json({ success: false, message: "결재 요청 없음" });
     }
 
-    const { current_approver_role, current_approver_name } = reqRows[0];
+    const { current_approver_role, current_approver_user_id } = reqRows[0];
 
     // ✅ 로그인한 사용자가 실제 결재자인지 검증
-    if (current_approver_name !== req.session.user.userName) {
+    if (current_approver_user_id !== req.session.user.userId) {
       return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
     }
 
     // ✅ 반려 이력 기록
     await conn.query(
       `INSERT INTO approval_history 
-         (request_id, approver_role, approver_name, comment, signature_path, status, approved_at)
+         (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
        VALUES (?, ?, ?, ?, ?, '반려', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
-      [requestId, current_approver_role, current_approver_name, comment, signaturePath]
+      [requestId, current_approver_role, current_approver_user_id, comment, signaturePath]
     );
 
     // ✅ 결재 요청 반려 처리
     await conn.query(
       `UPDATE approval_requests 
           SET status='반려', updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00'),
-              current_approver_role=NULL, current_approver_name=NULL
+              current_approver_role=NULL, current_approver_user_id=NULL
         WHERE id=?`,
       [requestId]
     );
@@ -1041,7 +1039,7 @@ app.put("/api/accountCategories/:id", async (req, res) => {
     const { category_name, level, parent_id, valid_from, valid_to } = req.body;
     await pool.query(
       `UPDATE account_categories 
-          SET category_name=?, updated_at=NOW()
+          SET category_name=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
         WHERE id=?`,
       [category_name, req.params.id]
     );
@@ -1058,7 +1056,7 @@ app.put("/api/accountCategories/:id/expire", async (req, res) => {
     const { valid_to } = req.body;
     await pool.query(
       `UPDATE account_categories 
-          SET valid_to=?, updated_at=NOW()
+          SET valid_to=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
         WHERE id=?`,
       [valid_to || new Date(), req.params.id]
     );
@@ -1105,7 +1103,7 @@ app.post("/api/budgets", async (req, res) => {
     await pool.query(
       `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
        VALUES (?, ?, ?, ?)
-       ON DUPLICATE KEY UPDATE budget_amount=?, updated_at=NOW()`,
+       ON DUPLICATE KEY UPDATE budget_amount=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')`,
       [dept_id, category_id, year, budget_amount, budget_amount]
     );
     res.json({ success: true });
@@ -1128,7 +1126,7 @@ app.post("/api/budgets/bulk", async (req, res) => {
     await pool.query(
       `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
        VALUES ?
-       ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount), updated_at = NOW()`,
+       ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount), updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')`,
       [values]
     );
 
