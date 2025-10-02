@@ -1,4 +1,3 @@
-truncate table budgets;
 truncate table approval_files;
 truncate table approval_items;
 truncate table approval_requests;
