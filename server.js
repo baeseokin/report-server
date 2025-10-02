@@ -743,7 +743,7 @@ app.get("/api/session", (req, res) => {
 /* ------------------------------------------------
    ✅ 사용자 관리
 ------------------------------------------------ */
-// ✅ 사용자 검색 API (roleIds/roleNames 동시 제공)
+// ✅ 사용자 검색 API (roleIds/roleNames 동시 제공) - FIXED
 app.get("/api/users/search", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
@@ -759,8 +759,8 @@ app.get("/api/users/search", async (req, res) => {
       u.email, 
       u.phone, 
       u.dept_name AS dept,
-      GROUP_CONCAT(DISTINCT r.id) AS roleIds,
-      GROUP_CONCAT(DISTINCT r.role_name) AS roleNames
+      GROUP_CONCAT(DISTINCT r.id ORDER BY r.id SEPARATOR ',') AS roleIds,
+      GROUP_CONCAT(DISTINCT r.role_name ORDER BY r.role_name SEPARATOR ',') AS roleNames
     FROM users u
     LEFT JOIN user_roles ur ON u.id = ur.user_id
     LEFT JOIN roles r ON ur.role_id = r.id
@@ -772,16 +772,18 @@ app.get("/api/users/search", async (req, res) => {
     query += " AND u.dept_name LIKE ?";
     params.push(`%${dept}%`);
   }
+
   if (role) {
     // 숫자면 role_id로, 아니면 role_name으로 필터
-    if (/^\\d+$/.test(role)) {
-      query += " AND r.id = ?";
+    if (/^\d+$/.test(role)) {
+      query += " AND r.role_id = ?";
       params.push(Number(role));
     } else {
       query += " AND r.role_name = ?";
       params.push(role);
     }
   }
+
   if (name) {
     query += " AND u.user_name LIKE ?";
     params.push(`%${name}%`);
@@ -797,6 +799,7 @@ app.get("/api/users/search", async (req, res) => {
     res.status(500).json({ success: false, message: "검색 중 오류가 발생했습니다." });
   }
 });
+
 
 // ✅ 사용자 목록 조회 (roleIds/roleNames 모두 제공)
 app.get("/api/users", async (req, res) => {
