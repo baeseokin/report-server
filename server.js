@@ -76,57 +76,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-/* ------------------------------------------------
-   📊 부서별 예산 & 지출 합계 조회 API
-   GET /api/expenses/summary?deptId=1&year=2025
------------------------------------------------- */
-app.get("/api/expenses/summary", async (req, res) => {
-  try {
-    const { deptId, year } = req.query;
-    if (!deptId || !year) {
-      return res.status(400).json({ success: false, message: "deptId, year 필요" });
-    }
-
-    // ✅ 최상위 계정(관) 가져오기
-    const [rootRows] = await pool.query(
-      `SELECT id, category_id 
-         FROM account_categories 
-        WHERE parent_id IS NULL AND level='관'
-        LIMIT 1`
-    );
-    if (rootRows.length === 0) {
-      return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
-    }
-    const rootCategoryId = rootRows[0].category_id;
-
-    // ✅ 예산 총액 (budgets)
-    const [[budgetRow]] = await pool.query(
-      `SELECT COALESCE(SUM(budget_amount),0) AS totalBudget
-         FROM budgets
-        WHERE dept_id=? AND year=? AND category_id=?`,
-      [deptId, year, rootCategoryId]
-    );
-
-    // ✅ 지출 총액 (expense_details)
-    const [[expenseRow]] = await pool.query(
-      `SELECT COALESCE(SUM(amount),0) AS totalExpense
-         FROM expense_details
-        WHERE dept_id=? AND year=?`,
-      [deptId, year]
-    );
-
-    res.json({
-      success: true,
-      totalBudget: budgetRow.totalBudget,
-      totalExpense: expenseRow.totalExpense,
-    });
-  } catch (err) {
-    console.error("❌ /api/expenses/summary 오류:", err);
-    res.status(500).json({ success: false, message: "조회 실패" });
-  }
-});
-
-
 
 /* ------------------------------------------------
    ✅ 결재 요청 등록 API (결재자 라인 반영)
@@ -156,9 +105,9 @@ app.post("/api/approval", async (req, res) => {
 
     // ✅ 신청자의 approver_order 찾기
     const [applicantRows] = await conn.query(
-      `SELECT approver_order 
-         FROM dept_approvers 
-        WHERE dept_name = ? AND approver_user_id = ? AND is_active = 1 
+      `SELECT order_no 
+         FROM approval_line 
+        WHERE dept_name = ? AND approver_user_id = ?
         LIMIT 1`,
       [deptName, userId]
     );
@@ -170,11 +119,11 @@ app.post("/api/approval", async (req, res) => {
     let nextApprover = null;
 
     if (applicantRows.length > 0) {
-      const applicantOrder = applicantRows[0].approver_order;
+      const applicantOrder = applicantRows[0].order_no;
       const [nextRows] = await conn.query(
-        `SELECT role, approver_user_id 
-           FROM dept_approvers 
-          WHERE dept_name = ? AND approver_order = ? AND is_active = 1 
+        `SELECT approver_role, approver_user_id 
+           FROM approval_line 
+          WHERE dept_name = ? AND order_no = ?
           LIMIT 1`,
         [deptName, applicantOrder + 1]
       );
@@ -192,7 +141,7 @@ app.post("/api/approval", async (req, res) => {
         `UPDATE approval_requests 
             SET current_approver_role = ?, current_approver_user_id = ? 
           WHERE id = ?`,
-        [nextApprover.role, nextApprover.approver_user_id, requestId]
+        [nextApprover.approver_role, nextApprover.approver_user_id, requestId]
       );
     }
     // ❌ else 제거 → 자동 완료 금지
@@ -389,6 +338,23 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       [id]
     );
 
+    // ✅ 결재선 (approval_line) - 부서 기준 + 재정부 규칙 + order_no 정렬
+    const [approvalLine] = await pool.query(
+      `
+      SELECT id, dept_name, approver_role, approver_user_id, order_no
+        FROM approval_line
+       WHERE dept_name = ?
+         and not (dept_name <> '재정부' AND approver_role = '재정부')
+       ORDER BY order_no ASC, id ASC
+      `,
+      [request.dept_name]
+    );
+
+    // (옵션) 프론트에서 편하게 쓰도록 역할만 뽑은 배열도 함께 내려줌
+    const approverRoles = Array.from(
+      new Set(approvalLine.map(l => l.approver_role))
+    );
+
     res.json({
       id: request.id,
       document_type: request.document_type,
@@ -400,7 +366,9 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       aliasName: request.aliasName,
       items,
       attachedFiles: files,
-      approvalHistory: history
+      approvalHistory: history,
+      approvalLine,
+      approverRoles
     });
   } catch (err) {
     console.error("❌ 상세조회 오류:", err);
@@ -1237,21 +1205,27 @@ app.post("/api/budgets/bulk", async (req, res) => {
 app.get("/api/expenses/summary", async (req, res) => {
   try {
     const { deptId, year } = req.query;
+    console.log("deptId :",deptId);
+
     if (!deptId || !year) {
       return res.status(400).json({ success: false, message: "deptId, year 필요" });
     }
 
     // ✅ 최상위 계정(관) 가져오기
     const [rootRows] = await pool.query(
-      `SELECT id 
+      `SELECT category_id 
          FROM account_categories 
-        WHERE parent_id IS NULL AND level='관'
-        LIMIT 1`
+        WHERE parent_id IS NULL AND level='관' AND dept_id=?
+        LIMIT 1`,
+        [deptId]
     );
+    console.log("rootRows :",rootRows);
+
     if (rootRows.length === 0) {
       return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
     }
-    const rootCategoryId = rootRows[0].id;
+    const rootCategoryId = rootRows[0].category_id;
+    console.log("rootCategoryId :",rootCategoryId);
 
     // ✅ 예산 총액 (budgets)
     const [[budgetRow]] = await pool.query(
@@ -1260,6 +1234,7 @@ app.get("/api/expenses/summary", async (req, res) => {
         WHERE dept_id=? AND year=? AND category_id=?`,
       [deptId, year, rootCategoryId]
     );
+    console.log("budgetRow :",budgetRow);
 
     // ✅ 지출 총액 (expense_details)
     const [[expenseRow]] = await pool.query(
