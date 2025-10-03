@@ -99,6 +99,30 @@ const uploadSignature = multer({
   }
 });
 
+// ───────────────────────────────────────────────────────────
+// 공통 유틸 & 권한 헬퍼
+// ───────────────────────────────────────────────────────────
+function getLoginUser(req) {
+  return req.session?.user || null;
+}
+function isAdmin(req) {
+  const u = getLoginUser(req);
+  return Array.isArray(u?.roles) && u.roles.some(r => r.role_name === "관리자");
+}
+function assertSelfOrAdmin(req, targetUserId) {
+  const u = getLoginUser(req);
+  // userId는 문자열(로그인 ID), DB user_signatures.user_id와 동일 타입
+  if (!u) return false;
+  if (isAdmin(req)) return true;
+  return String(u.userId) === String(targetUserId);
+}
+
+// 파일 URL 생성: /api/files/:filename 엔드포인트에 맞춰 인코딩
+function makeSignatureUrl(filePath) {
+  // filePath 예: "signatures/1727952435_signature.png"
+  return `/api/files/${encodeURIComponent(filePath)}`;
+}
+
 
 /* ------------------------------------------------
    ✅ 결재 요청 등록 API (결재자 라인 반영)
@@ -1076,7 +1100,95 @@ app.post("/api/users/:id/signatures", uploadSignature.single("file"), async (req
   }
 });
 
+// ───────────────────────────────────────────────────────────
+// GET /api/users/me/signature
+// 기본 서명(최신 is_default=1) 조회 → { signature: "/api/files/..." | null }
+// ───────────────────────────────────────────────────────────
+app.get("/api/users/me/signature", async (req, res) => {
+  const u = getLoginUser(req);
+  if (!u) return res.status(401).json({ message: "Unauthorized" });
 
+  try {
+    const [rows] = await pool.query(
+      `SELECT file_path 
+         FROM user_signatures 
+        WHERE user_id = ? AND is_default = 1 
+        ORDER BY created_at DESC 
+        LIMIT 1`,
+      [u.id] // 문자열 사용자아이디
+    );
+
+    if (!rows.length) return res.json({ signature: null });
+
+    const url = makeSignatureUrl(rows[0].file_path);
+    return res.json({ signature: url });
+  } catch (e) {
+    console.error("GET /api/users/me/signature error:", e);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
+
+// ───────────────────────────────────────────────────────────
+// PUT /api/users/me/signature
+// body: { signature: "data:image/png;base64,..." }
+// 저장: 파일 디코드 → uploads/signatures/ 에 저장 → user_signatures에 INSERT + is_default=1
+// ───────────────────────────────────────────────────────────
+app.put("/api/users/me/signature", async (req, res) => {
+  const u = getLoginUser(req);
+  if (!u) return res.status(401).json({ message: "Unauthorized" });
+
+  try {
+    const { signature } = req.body;
+    if (typeof signature !== "string" || !signature.startsWith("data:image/png;base64,")) {
+      return res.status(400).json({ message: "Invalid signature format" });
+    }
+
+    // 크기 제한(옵션)
+    const base64Data = signature.replace(/^data:image\/png;base64,/, "");
+    const buf = Buffer.from(base64Data, "base64");
+    if (buf.length > 2 * 1024 * 1024) { // 2MB
+      return res.status(413).json({ message: "Signature too large (>2MB)" });
+    }
+
+    // 파일로 저장
+    const ts = Date.now();
+    const filename = `${ts}_signature.png`;
+    const absPath = path.join(SIGN_BASE_DIR, filename);
+    fs.writeFileSync(absPath, buf);
+
+    const relPath = path.posix.join("signatures", filename);
+
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // 기존 기본서명 해제
+      await conn.query(
+        "UPDATE user_signatures SET is_default = 0 WHERE user_id = ? AND is_default = 1",
+        [u.id]
+      );
+
+      // 새 레코드 삽입 (기본서명)
+      await conn.query(
+        "INSERT INTO user_signatures (user_id, file_path, is_default) VALUES (?, ?, 1)",
+        [u.id, relPath]
+      );
+
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      console.error("PUT /api/users/me/signature tx error:", e);
+      return res.status(500).json({ message: "Server error" });
+    } finally {
+      conn.release();
+    }
+
+    return res.json({ ok: true, file_path: relPath, url: makeSignatureUrl(relPath) });
+  } catch (e) {
+    console.error("PUT /api/users/me/signature error:", e);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
 
 
 
