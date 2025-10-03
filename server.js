@@ -76,6 +76,29 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+// ✅ 서명 파일 저장소 (캔버스 → PNG 업로드용)
+const SIGN_BASE_DIR = path.join(uploadDir, "signatures");
+fs.mkdirSync(SIGN_BASE_DIR, { recursive: true });
+
+const signatureStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, SIGN_BASE_DIR),
+  filename: (_req, file, cb) => {
+    const ts = Date.now();
+    const safe = (file.originalname || "signature.png").replace(/[^\w.\-]/g, "_");
+    cb(null, `${ts}_${safe}`);
+  }
+});
+const uploadSignature = multer({
+  storage: signatureStorage,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB
+  fileFilter: (_req, file, cb) => {
+    if (!/^image\/(png|jpe?g|gif|webp)$/i.test(file.mimetype)) {
+      return cb(new Error("이미지 파일만 업로드 가능합니다."), false);
+    }
+    cb(null, true);
+  }
+});
+
 
 /* ------------------------------------------------
    ✅ 결재 요청 등록 API (결재자 라인 반영)
@@ -604,29 +627,51 @@ app.get("/api/approval/:id/files", async (req, res) => {
   }
 });
 
-// 안전하게 file_path 기준으로 찾기
+// ✅ 안전하게 file_path 기준으로 찾기 (단일 세그먼트 + 디코드 + 보안가드)
 app.get("/api/files/:filename", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
 
-  const filename = req.params.filename;
   try {
-    const filePath = path.join(uploadDir, filename);
-    if (fs.existsSync(filePath)) {
-      return res.sendFile(filePath);
+    // 예: "signatures%2Fabc.png" → "signatures/abc.png"
+    const encoded = req.params.filename || "";
+    const relPath = decodeURIComponent(encoded)
+      .replace(/^[/\\]+/, "")        // 선행 슬래시 제거
+      .replace(/\\/g, "/")           // 백슬래시 → 슬래시
+      .replace(/\.\.(\/|\\)/g, "_"); // 상위경로 차단
+
+    const absPath = path.join(uploadDir, relPath);
+    if (!absPath.startsWith(uploadDir)) {
+      return res.status(400).json({ error: "Invalid path" });
     }
 
-    // 🔑 DB 조회도 file_path 기준으로!
-    const [rows] = await pool.query(
-      "SELECT file_path FROM approval_files WHERE file_path = ? LIMIT 1",
-      [filename]
-    );
-    if (rows.length > 0) {
-      const dbFilePath = path.join(uploadDir, rows[0].file_path);
-      if (fs.existsSync(dbFilePath)) {
-        return res.sendFile(dbFilePath);
-      }
+    // 1) 물리 파일 있으면 바로 응답
+    if (fs.existsSync(absPath)) {
+      return res.sendFile(absPath);
+    }
+
+    // 2) 첨부파일 테이블 fallback
+    let dbPath = null;
+    {
+      const [rows] = await pool.query(
+        "SELECT file_path FROM approval_files WHERE file_path = ? LIMIT 1",
+        [relPath]
+      );
+      if (rows.length) dbPath = path.join(uploadDir, rows[0].file_path);
+    }
+
+    // 3) 사용자 서명 테이블 fallback
+    if (!dbPath) {
+      const [srows] = await pool.query(
+        "SELECT file_path FROM user_signatures WHERE file_path IN (?, ?) LIMIT 1",
+        [relPath, `signatures/${relPath}`]
+      );
+      if (srows.length) dbPath = path.join(uploadDir, srows[0].file_path);
+    }
+
+    if (dbPath && fs.existsSync(dbPath)) {
+      return res.sendFile(dbPath);
     }
 
     return res.status(404).json({ error: "File not found" });
@@ -635,6 +680,7 @@ app.get("/api/files/:filename", async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+
 
 
 /* ------------------------------------------------
@@ -744,7 +790,7 @@ app.get("/api/users/search", async (req, res) => {
   if (role) {
     // 숫자면 role_id로, 아니면 role_name으로 필터
     if (/^\d+$/.test(role)) {
-      query += " AND r.role_id = ?";
+      query += " AND r.id = ?";
       params.push(Number(role));
     } else {
       query += " AND r.role_name = ?";
@@ -949,6 +995,7 @@ app.delete("/api/users/:id", async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
+    await conn.query("DELETE FROM user_signatures WHERE user_id = ?", [userId]);
     await conn.query("DELETE FROM user_roles WHERE user_id=?", [userId]);
     await conn.query("DELETE FROM users WHERE id=?", [userId]);
     await conn.commit();
@@ -961,6 +1008,74 @@ app.delete("/api/users/:id", async (req, res) => {
     conn.release();
   }
 });
+
+// ── ✅ 사용자 기본 서명 조회
+app.get("/api/users/:id/signature/default", async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ message: "로그인이 필요합니다." });
+
+  const targetUserId = req.params.id;
+
+  // (선택) 관리자 또는 본인만 허용
+  const isAdmin = Array.isArray(req.session.user.roles) &&
+    req.session.user.roles.some(r => r.role_name === "관리자");
+  if (!isAdmin && String(req.session.user.id) !== String(targetUserId)) {
+    return res.status(403).json({ message: "권한 없음" });
+  }
+
+  try {
+    const [rows] = await pool.query(
+      "SELECT id, file_path, is_default, created_at FROM user_signatures WHERE user_id=? AND is_default=1 LIMIT 1",
+      [targetUserId]
+    );
+    res.json(rows[0] || { id: null, file_path: null, is_default: 0 });
+  } catch (e) {
+    console.error("❌ 기본 서명 조회 실패:", e);
+    res.status(500).json({ message: "server error" });
+  }
+});
+
+// ── ✅ 사용자 서명 업로드(캔버스→PNG) + 기본지정 옵션
+// FormData: file=<blob>, isDefault=1|0
+app.post("/api/users/:id/signatures", uploadSignature.single("file"), async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ message: "로그인이 필요합니다." });
+
+  const targetUserId = req.params.id;
+  const isDefault = req.body.isDefault === "1" ? 1 : 0;
+
+  // (선택) 관리자 또는 본인만 허용
+  const isAdmin = Array.isArray(req.session.user.roles) &&
+    req.session.user.roles.some(r => r.role_name === "관리자");
+  if (!isAdmin && String(req.session.user.id) !== String(targetUserId)) {
+    return res.status(403).json({ message: "권한 없음" });
+  }
+  if (!req.file) return res.status(400).json({ message: "파일이 없습니다." });
+
+  // 저장 경로는 uploads/signatures/파일명 → DB/클라이언트에는 "signatures/파일명"
+  const relPath = path.posix.join("signatures", req.file.filename);
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    if (isDefault) {
+      await conn.query("UPDATE user_signatures SET is_default=0 WHERE user_id=?", [targetUserId]);
+    }
+    await conn.query(
+      "INSERT INTO user_signatures (user_id, file_path, is_default) VALUES (?, ?, ?)",
+      [targetUserId, relPath, isDefault]
+    );
+
+    await conn.commit();
+    res.json({ success: true, file_path: relPath });
+  } catch (e) {
+    await conn.rollback();
+    console.error("❌ 서명 저장 실패:", e);
+    res.status(500).json({ message: "server error" });
+  } finally {
+    conn.release();
+  }
+});
+
 
 
 
