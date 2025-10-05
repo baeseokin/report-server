@@ -863,6 +863,41 @@ app.get("/api/users", async (req, res) => {
   }
 });
 
+// server.js 또는 routes 파일 내에 추가
+app.get("/api/public/users", async (req, res) => {
+  const { deptId, roleId } = req.query;
+
+  // 파라미터 체크
+  if (!deptId || !roleId) {
+    return res.status(400).json({ error: "deptId와 roleId는 필수입니다." });
+  }
+
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT 
+        u.user_id   AS userId,
+        u.user_name AS userName,
+        d.dept_name AS deptName,
+        r.role_name AS roleName
+      FROM users u
+      JOIN departments d ON u.dept_name = d.dept_name
+      JOIN user_roles ur ON ur.user_id = u.id
+      JOIN roles r ON ur.role_id = r.id
+      WHERE d.id = ? 
+        AND ur.role_id = ?
+      ORDER BY u.user_name
+      `,
+      [deptId, roleId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("❌ /api/public/users 조회 실패:", err);
+    res.status(500).json({ error: "사용자 조회 실패" });
+  }
+});
+
+
 
 // ✅ 사용자 등록 (roles: ID 배열 권장, 이름 배열도 허용) + 트랜잭션
 app.post("/api/users", async (req, res) => {
@@ -1195,6 +1230,17 @@ app.put("/api/users/me/signature", async (req, res) => {
 /* ------------------------------------------------
    ✅ 권한 관리
 ------------------------------------------------ */
+app.get("/api/public/roles", async (req, res) => {
+  try {
+    const [rows] = await pool.query("SELECT id AS role_id, role_name FROM roles");
+    res.json(rows);
+  } catch (err) {
+    console.error("역할 조회 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+
 app.get("/api/roles", async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
