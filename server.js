@@ -1231,9 +1231,23 @@ app.put("/api/users/me/signature", async (req, res) => {
    ✅ 권한 관리
 ------------------------------------------------ */
 app.get("/api/public/roles", async (req, res) => {
+  const { deptId } = req.query;
+
+  // 파라미터 체크
+  if (!deptId) {
+    return res.status(400).json({ error: "deptId 는 필수입니다." });
+  }
+
   try {
-    const [rows] = await pool.query("SELECT id AS role_id, role_name FROM roles");
-    res.json(rows);
+    const [rows] = await pool.query(
+      `select distinct r.role_name, r.id as role_id 
+        from departments d
+        inner join users u on d.dept_name  = u.dept_name
+        inner join user_roles ur on u.id = ur.user_id 
+        inner join roles r on r.id = ur.role_id 
+        where d.id = ? ` 
+      ,[deptId]);
+      res.json(rows);
   } catch (err) {
     console.error("역할 조회 실패:", err);
     res.status(500).json({ success: false });
