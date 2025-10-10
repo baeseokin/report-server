@@ -7,7 +7,25 @@ const path = require("path");
 const fs = require("fs");
 const session = require("express-session");
 const bcrypt = require("bcrypt");
-require("dotenv").config();   // ✅ .env 불러오기
+const os = require("os");
+require("dotenv").config();   // ✅ .env 불러오기 (가장 먼저)
+// ───────────────────────────────────────────────────────────
+// ✅ NODE_ENV 자동 감지 (로컬=development, Pod/컨테이너=production)
+//    - 명시적으로 NODE_ENV가 있으면 그 값을 우선 사용
+//    - K8s 환경 변수(KUBERNETES_SERVICE_HOST) 또는 hostname 패턴으로 감지
+// ───────────────────────────────────────────────────────────
+
+if (!process.env.NODE_ENV) {
+  const isK8s = !!process.env.KUBERNETES_SERVICE_HOST || /pod|deploy|stateful|sts/i.test(os.hostname());
+  console.log("isK8s:",isK8s);
+  console.log("!!process.env.KUBERNETES_SERVICE_HOST:",!!process.env.KUBERNETES_SERVICE_HOST);
+  console.log("/pod|deploy|stateful|sts/i.test(os.hostname()):",/pod|deploy|stateful|sts/i.test(os.hostname()));
+  process.env.NODE_ENV = isK8s ? "production" : "development";
+}
+
+console.error("process.env.NODE_ENV:",process.env.NODE_ENV);
+
+// ✅ NODE_ENV 확정 후 env 헬퍼 로드 (순서 중요!)
 const { envPick, envNumber, ENV } = require("./env");
 
 const app = express();
@@ -35,6 +53,11 @@ app.use(cors({
 
 
 app.use(bodyParser.json());
+// 프록시(로드밸런서/Ingress) 뒤에 있을 수 있으므로 운영에서는 trust proxy 설정
+if (ENV === "production") {
+  app.set("trust proxy", 1);
+}
+
 app.use(
   session({
     secret: envPick("SESSION_SECRET", "secret-key"),
@@ -42,8 +65,10 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: false,       // HTTPS 아니면 false
-      sameSite: "lax"      // 모바일에서도 안전하게 동작
+      // ✅ HTTPS일 때만 Secure 자동 적용(프록시 고려)
+      //    - Ingress가 TLS 종료하면 req.secure=true로 인식됨(trust proxy 필요)
+      secure: "auto",
+      sameSite: "lax"
     }
   })
 );
@@ -61,6 +86,9 @@ const pool = mysql.createPool({
   dateStrings: true,
   timezone: envPick("DB_TIMEZONE", "Z")
 });
+console.log(`🌍 NODE_ENV: ${process.env.NODE_ENV}  (ENV helper: ${ENV})`);
+console.log(`📦 DB → ${envPick("DB_HOST","localhost")}:${envNumber("DB_PORT",3306)} / ${envPick("DB_NAME","test")}`);
+
 
 // 업로드 폴더 생성
 const uploadDir = path.join(__dirname, "uploads");
@@ -1589,5 +1617,5 @@ app.get("/api/budget-status", async (req, res) => {
    ✅ 서버 실행
 ------------------------------------------------ */
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on 0.0.0.0:${PORT} (${ENV})`);
 });
