@@ -19,7 +19,7 @@ const { sendMail } = require("./emailService");          // ← 경로 확인
  * @param {string=}         opts.from       발신자 오버라이드(선택, 기본은 process.env.MAIL_FROM)
  * @param {string=}         opts.replyTo    회신 주소(선택)
  * @param {Array=}          opts.attachments Nodemailer attachments (선택)
- * @param {string=}         opts.ctaText    버튼 문구(선택, 기본: "상세보기")
+ * @param {string=}         opts.ctaText    버튼 문구(선택, 기본: "재정시스템 바로가기")
  * @param {string=}         opts.ctaUrl     버튼 링크(선택, 기본: APP_BASE_URL/report/{requestId})
  * @param {string=}         opts.footerText 푸터 문구(선택)
  */
@@ -56,7 +56,7 @@ async function sendApprovalDecisionMail(opts) {
   const html = buildMailHTML({
     title,
     bodyText,                                         // 텍스트는 템플릿에서 nl2br 처리
-    ctaText: resolvedCtaUrl ? (ctaText || "결재요청 상세보기") : undefined,
+    ctaText: resolvedCtaUrl ? (ctaText || "재정시스템 바로가기") : undefined,
     ctaUrl: resolvedCtaUrl,
     footerText: footerText || "본 메일은 시스템에서 자동 발송되었습니다.",
   });
