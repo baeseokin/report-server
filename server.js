@@ -635,6 +635,14 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
       } 
 
     }else if(status === "결재완료"){
+
+      // ✅ 승인 이력 기록
+      await conn.query(
+        `INSERT INTO approval_history 
+          (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
+        VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
+        [requestId, current_approver_role, current_approver_user_id, comment, signaturePath]
+      );      
         // 재정부 결재자 → 재정부이관완료 처리
         await conn.query(
           `UPDATE approval_requests
