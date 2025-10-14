@@ -51,7 +51,8 @@ async function sendApprovalDecisionMail(opts) {
 
   const baseUrl = process.env.APP_BASE_URL || "";
   const resolvedCtaUrl =
-    ctaUrl || (baseUrl && requestId ? `${baseUrl}/report/${requestId}` : undefined);
+    //ctaUrl || (baseUrl && requestId ? `${baseUrl}/report/${requestId}` : baseUrl);
+    ctaUrl || baseUrl;
 
   const html = buildMailHTML({
     title,
@@ -64,7 +65,7 @@ async function sendApprovalDecisionMail(opts) {
   const subject = title;
   const mailOptions = {
     to: toList,
-    cc: cc || process.env.MAIL_CC || undefined,
+    cc: cc || undefined,
     bcc,
     subject,
     html,
