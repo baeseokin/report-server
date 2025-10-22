@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: report-server
+  # namespace: tomcat-test   # 파일에 네임스페이스 고정하고 싶으면 주석 해제
 spec:
   replicas: 1
   selector:
@@ -12,13 +13,35 @@ spec:
       labels:
         app: report-server
     spec:
+      # 컨테이너는 1000:1000 권한으로 실행, 볼륨 그룹도 1000 적용
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      # 업로드 디렉토리 생성 및 소유권 변경 (root 로 실행)
+      initContainers:
+        - name: fix-perms
+          image: busybox:1.36
+          securityContext:
+            runAsUser: 0
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /data/uploads/signatures /data/uploads/attachments
+              chown -R 1000:1000 /data/uploads
+          volumeMounts:
+            - name: uploads
+              mountPath: /data
+
       containers:
         - name: report-server
-          image: baeseokin/report-server:0.3   # ✅ DockerHub에 푸시한 이미지
+          image: baeseokin/report-server:0.6
+          imagePullPolicy: Always
           ports:
             - containerPort: 3001
           env:
-            # ✅ MariaDB 연결 정보 (K8s Service로 연결)
             - name: DB_HOST
               value: "mariadb-service"
             - name: DB_PORT
@@ -29,12 +52,24 @@ spec:
               value: "reportpass"
             - name: DB_NAME
               value: "reportdb"
+            # 서버 코드에서 사용할 업로드 루트 경로(복수형 uploads로 통일)
+            - name: UPLOAD_DIR
+              value: "/app/uploads"
+          volumeMounts:
+            - name: uploads
+              mountPath: /app/uploads   # ← 복수형으로 통일
+              # subPath: uploads        # 필요 시 PV 내 하위폴더만 쓸 때 주석 해제
 
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: uploads-pvc       # hostpath(StorageClass)로 Bound 된 PVC
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: report-server
+  # namespace: tomcat-test
 spec:
   selector:
     app: report-server
@@ -42,6 +77,6 @@ spec:
     - protocol: TCP
       port: 3001
       targetPort: 3001
-      nodePort: 30002   # <- NodePort 지정 (예: 30002)
+      nodePort: 30002
   type: NodePort
 
