@@ -1,17 +1,9 @@
-[dotenv@17.2.3] injecting env (24) from .env -- tip: ⚙️  override existing env vars with { override: true }
+[dotenv@17.2.3] injecting env (24) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
 isK8s: false
 !!process.env.KUBERNETES_SERVICE_HOST: false
 /pod|deploy|stateful|sts/i.test(os.hostname()): false
 process.env.NODE_ENV: development
-[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  write to custom object with { processEnv: myObject }
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
 🌍 NODE_ENV: development  (ENV helper: development)
 📦 DB → localhost:32006 / reportdb
 ✅ Server running on 0.0.0.0:3001 (development)
-📥 로그인 시도: admin IP: 127.0.0.1
-✅ 로그인 성공: admin → 세션 저장됨
-📥 로그인 시도: ang001 IP: 127.0.0.1
-✅ 로그인 성공: ang001 → 세션 저장됨
-deptId : 5
-rootRows : [ { category_id: 'ANG01000000' } ]
-rootCategoryId : ANG01000000
-budgetRow : { totalBudget: '12340000' }

@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: report-form-ui
 spec:
-  replicas: 1
+  replicas: 3 
   selector:
     matchLabels:
       app: report-form-ui
@@ -14,7 +14,8 @@ spec:
     spec:
       containers:
       - name: report-form-ui
-        image: baeseokin/report-form-ui:0.3  # 또는 dockerhub 이미지
+        image: baeseokin/report-form-ui:0.6  # 또는 dockerhub 이미지
+        imagePullPolicy: Always
         ports:
         - containerPort: 80
 ---
