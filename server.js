@@ -293,12 +293,13 @@ app.post("/api/approval", async (req, res) => {
             `요청일자: ${date}\n` +
             `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
             (comment ? `결재 코멘트: ${comment}\n` : "");
-
+        const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
         await sendApprovalDecisionMail({
           to,
           title,
           bodyText,
           requestId,
+          ctaUrl
         });
         
       } catch (e) {
@@ -715,13 +716,15 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
             `이전 결재자: ${mailPlan.approvedBy}\n` +
             (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
-
+          const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
+        
           await sendApprovalDecisionMail({
             to,
             //cc,
             title,
             bodyText,
             requestId: mailPlan.requestId,
+            ctaUrl
           });
 
           console.log(`📧 [handoff] #${mailPlan.requestId} → ${to} (cc:${cc || "-"})`);
@@ -748,6 +751,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
             `최종 승인자: ${mailPlan.approvedBy}\n` +
             (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
+          const ctaUrl = process.env.APP_BASE_URL+"/approvalList";  
 
           await sendApprovalDecisionMail({
             to,
@@ -755,6 +759,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             title,
             bodyText,
             requestId: mailPlan.requestId,
+            ctaUrl
           });
 
           console.log(`📧 [completed] #${mailPlan.requestId} → ${to} (cc:${cc || "-"})`);
