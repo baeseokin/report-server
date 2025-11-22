@@ -1,9 +1,45 @@
-[dotenv@17.2.3] injecting env (24) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (24) from .env -- tip: 🛠️  run anywhere with `dotenvx run -- yourcommand`
 isK8s: false
 !!process.env.KUBERNETES_SERVICE_HOST: false
 /pod|deploy|stateful|sts/i.test(os.hostname()): false
 process.env.NODE_ENV: development
-[dotenv@17.2.3] injecting env (0) from .env -- tip: 🔄 add secrets lifecycle management: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
 🌍 NODE_ENV: development  (ENV helper: development)
 📦 DB → localhost:32006 / reportdb
 ✅ Server running on 0.0.0.0:3001 (development)
+📥 로그인 시도: mus002 IP: 127.0.0.1
+✅ 로그인 성공: mus002 → 세션 저장됨
+/api/approval/approve - status : 결재진행중
+/api/approval/approve - nextRows : [ { approver_role: '위원장', approver_user_id: 'mus003' } ]
+📧 Mail sent: {
+  subject: '결재 진행 요청 - 청구지출결의서 (요청자: 배석인)',
+  to: [ 'baeseokin@kakao.com' ],
+  messageId: '<3760cc65-18d3-8530-ae9e-7e5072d3af76@gmail.com>'
+}
+❌ approval approve mail error: ReferenceError: cc is not defined
+    at Immediate.<anonymous> (/Users/baeseokin/report-server/server.js:730:74)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+/api/approval/approve - status : 결재진행중
+/api/approval/approve - nextRows : [ { approver_role: '위원장', approver_user_id: 'mus003' } ]
+📧 Mail sent: {
+  subject: '결재 진행 요청 - 청구지출결의서 (요청자: 배석인)',
+  to: [ 'baeseokin@kakao.com' ],
+  messageId: '<b9be8c08-9e1b-4737-433e-e90fb3be0bbd@gmail.com>'
+}
+❌ approval approve mail error: ReferenceError: cc is not defined
+    at Immediate.<anonymous> (/Users/baeseokin/report-server/server.js:730:74)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+📥 로그인 시도: mus003 IP: 127.0.0.1
+✅ 로그인 성공: mus003 → 세션 저장됨
+/api/approval/approve - status : 결재진행중
+/api/approval/approve - nextRows : []
+📧 Mail sent: {
+  subject: '최종 승인 완료 - 청구지출결의서 (요청일자: 2025-11-22)',
+  to: [ 'baeseokin@gmail.com' ],
+  messageId: '<3cd8d5ed-6c69-7558-7885-dfdb8a6d780a@gmail.com>'
+}
+❌ approval approve mail error: ReferenceError: cc is not defined
+    at Immediate.<anonymous> (/Users/baeseokin/report-server/server.js:765:76)
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
