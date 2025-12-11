@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: uploads-pvc
-  namespace: tomcat-test
+  namespace: report
 spec:
   storageClassName: hostpath   # ★ 현재 클러스터가 실제로 쓰는 SC
   accessModes:
