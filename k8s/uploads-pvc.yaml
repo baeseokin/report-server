@@ -9,5 +9,5 @@ spec:
     - ReadWriteOnce            # hostpath는 보통 RWO만 지원
   resources:
     requests:
-      storage: 10Gi
+      storage: 200Gi
 
