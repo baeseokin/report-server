@@ -1824,6 +1824,77 @@ app.get("/api/expenses/summary", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------
+   📊 부서 + '항' 기준 예산/지출/잔액 조회 API (직접 매핑만)
+   GET /api/expenses/summaryByCategory?deptId=1&year=2025&hangCategoryId=2001
+
+   - hangCategoryId: account_categories.category_id (level='항'의 category_id)
+   - 예산(budgets): category_id = hangCategoryId 합계만
+   - 지출(expense_details): category_id = hangCategoryId 합계만
+------------------------------------------------ */
+app.get("/api/expenses/summaryByCategory", async (req, res) => {
+  try {
+    const { deptId, year, hangCategoryId } = req.query;
+
+    if (!deptId || !year || !hangCategoryId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "deptId, year, hangCategoryId 필요" });
+    }
+
+    // ✅ 유효성: hangCategoryId가 '항'인지 체크 (유지)
+    const [[hangRow]] = await pool.query(
+      `SELECT id
+         FROM account_categories
+        WHERE dept_id = ?
+          AND category_id = ?
+          AND level = '항'
+        LIMIT 1`,
+      [deptId, hangCategoryId]
+    );
+
+    if (!hangRow) {
+      return res
+        .status(400)
+        .json({ success: false, message: "선택한 category_id가 '항'이 아닙니다." });
+    }
+
+    // ✅ 예산 합계: 선택한 항(category_id)만
+    const [[budgetRow]] = await pool.query(
+      `SELECT COALESCE(SUM(budget_amount), 0) AS totalBudget
+         FROM budgets
+        WHERE dept_id = ?
+          AND year = ?
+          AND category_id = ?`,
+      [deptId, year, hangCategoryId]
+    );
+
+    // ✅ 지출 합계: 선택한 항(category_id)만
+    const [[expenseRow]] = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS totalExpense
+         FROM expense_details
+        WHERE dept_id = ?
+          AND year = ?
+          AND category_id = ?`,
+      [deptId, year, hangCategoryId]
+    );
+
+    const totalBudget = Number(budgetRow.totalBudget) || 0;
+    const totalExpense = Number(expenseRow.totalExpense) || 0;
+
+    return res.json({
+      success: true,
+      totalBudget,
+      totalExpense,
+      remainingBudget: totalBudget - totalExpense,
+    });
+  } catch (err) {
+    console.error("❌ /api/expenses/summaryByCategory 오류:", err);
+    return res.status(500).json({ success: false, message: "조회 실패" });
+  }
+});
+
+
 
 /* ------------------------------------------------
    📊 부서별 전체 예산/지출/잔액 조회 API
