@@ -1198,13 +1198,13 @@ app.post("/api/users", async (req, res) => {
       return res.status(409).json({ success: false, message: "이미 존재하는 사용자ID입니다." });
     }
 
-    // ✅ 비밀번호 규칙 (영문/숫자 포함, 7자 이상)
-    const regex = /^(?=.*[A-Za-z])(?=.*\d).{7,}$/;
+    // ✅ 비밀번호 규칙 (4자 이상)
+    const regex = /^.{4,}$/;
     if (!regex.test(password)) {
       await conn.rollback();
       return res.status(400).json({
         success: false,
-        message: "비밀번호 규칙 위반(영문/숫자 포함, 7자 이상)",
+        message: "비밀번호 규칙 위반(4자 이상)",
       });
     }
 
@@ -1274,14 +1274,14 @@ app.put("/api/users/:id", async (req, res) => {
       [name, email, phone, dept, userId]
     );
 
-    // 2) 비밀번호 (선택) — 모든 특수문자 허용 + 7자 이상
+    // 2) 비밀번호 (선택) — 4자 이상
     if (newPassword && newPassword.trim() !== "") {
-      const regex = /^(?=.*[A-Za-z])(?=.*\d).{7,}$/;
+      const regex = /^.{4,}$/;
       if (!regex.test(newPassword)) {
         await conn.rollback();
         return res.status(400).json({
           success: false,
-          message: "비밀번호 규칙 위반(영문/숫자 포함, 7자 이상)",
+          message: "비밀번호 규칙 위반(4자 이상)",
         });
       }
       const hash = await bcrypt.hash(newPassword, 10);
