@@ -188,15 +188,16 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { documentType, deptName, author, userId, date, totalAmount, comment, aliasName, items } =
+    const { documentType, deptName, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
       req.body;
 
+  
     // approval_requests 저장 (status = 결재진행중)
     const [result] = await conn.query(
       `INSERT INTO approval_requests 
-       (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, '결재진행중')`,
-      [documentType, deptName, author, date, totalAmount, comment, aliasName]
+       (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, '결재진행중', ?, ?)`,
+      [documentType, deptName, author, date, totalAmount, comment, aliasName, selectedGwan, selectedHang]
     );
 
     const requestId = result.insertId;
@@ -423,7 +424,8 @@ app.post("/api/approvalList", async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, 
-              ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id
+              ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
+              ar.category_gwan as selectedGwan, ar.category_hang as selectedHang
        FROM approval_requests ar
        ${where}
        ORDER BY ar.request_date DESC, ar.id DESC
@@ -503,6 +505,8 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       total_amount: request.total_amount,
       comment: request.comment,
       aliasName: request.aliasName,
+      selectedGwan: request.category_gwan,
+      selectedHang: request.category_hang,
       items,
       attachedFiles: files,
       approvalHistory: history,
