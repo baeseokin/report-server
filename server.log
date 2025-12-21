@@ -1,12 +1,24 @@
-[dotenv@17.2.3] injecting env (23) from .env -- tip: 🔑 add access controls to secrets: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (23) from .env -- tip: ⚙️  specify custom .env file path with { path: '/custom/path/.env' }
 isK8s: false
 !!process.env.KUBERNETES_SERVICE_HOST: false
 /pod|deploy|stateful|sts/i.test(os.hostname()): false
 process.env.NODE_ENV: development
-[dotenv@17.2.3] injecting env (0) from .env -- tip: 👥 sync secrets across teammates & machines: https://dotenvx.com/ops
+[dotenv@17.2.3] injecting env (0) from .env -- tip: ⚙️  enable debug logging with { debug: true }
 🌍 NODE_ENV: development  (ENV helper: development)
 📦 DB → localhost:32006 / reportdb
 ✅ Server running on 0.0.0.0:3001 (development)
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
 📥 로그인 시도: ang001 IP: 127.0.0.1
 ✅ 로그인 성공: ang001 → 세션 저장됨
 /api/approval - nextUser: { user_name: '김개욱', email: 'wisebsi@naver.com' }
@@ -14,5 +26,9 @@ process.env.NODE_ENV: development
 📧 Mail sent: {
   subject: '결재 진행 요청 - 청구지출결의서 (요청자: 배석인)',
   to: [ 'wisebsi@naver.com' ],
-  messageId: '<8408822b-cdb4-374c-71b7-8e61e7ded721@gmail.com>'
+  messageId: '<6521e15f-f5b0-f11d-4c47-c7c94746c568@gmail.com>'
 }
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
+📥 로그인 시도: ang001 IP: 127.0.0.1
+✅ 로그인 성공: ang001 → 세션 저장됨
