@@ -548,9 +548,9 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     }
 
     const reqRow = reqRows[0];
-    const { dept_name, current_approver_role, current_approver_user_id, status } = reqRow;
+    const { dept_name, current_approver_role, current_approver_user_id, status, total_amount } = reqRow;
 
-    console.log("/api/approval/approve - status :", status);
+    //console.log("/api/approval/approve - status :", status);
     if (status === "결재진행중"){
 
       // ✅ 결재진행중인 경우, 로그인한 사용자가 실제 결재자인지 검증
@@ -580,7 +580,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
         [dept_name, currentOrder + 1]
       );
 
-      console.log("/api/approval/approve - nextRows :", nextRows);
+      //console.log("/api/approval/approve - nextRows :", nextRows);
     
       if (nextRows.length > 0) {
         // 다음 결재자 지정
@@ -646,35 +646,35 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           [requestId]
         );
 
-        // ✅ 신청 총액 가져오기
-        const [[{ totalAmount }]] = await conn.query(
-          `SELECT SUM(amount) AS totalAmount FROM approval_items WHERE request_id=?`,
+        // ✅ dept_id, category_gwan, category_hang 조회
+        const [[deptRow]] = await conn.query(
+          `SELECT d.id as dept_id, gwan.category_id as category_gwan,  hang.category_id as category_hang
+          FROM approval_requests ar
+          INNER JOIN departments d
+            ON d.dept_name = ar.dept_name 
+          INNER JOIN account_categories hang
+            ON hang.dept_id = d.id
+            AND hang.level = '항'
+            AND hang.category_name = ar.category_hang 
+          INNER JOIN account_categories gwan
+            ON gwan.id = hang.parent_id
+            AND gwan.level = '관'
+            AND gwan.category_name  = ar.category_gwan 
+          where ar.id =?`,
           [requestId]
         );
 
-        // ✅ dept_id 조회
-        const [[deptRow]] = await conn.query(
-          `SELECT id FROM departments WHERE dept_name=?`,
-          [dept_name]
-        );
 
-        // ✅ 최상위 계정(category_id: 관) 찾기
-        const [[categoryRow]] = await conn.query(
-          `SELECT id, category_id FROM account_categories 
-            WHERE dept_id=? AND parent_id IS NULL 
-            ORDER BY id LIMIT 1`,
-          [deptRow.id]
-        );
 
-        if (categoryRow && totalAmount > 0) {
+        if (deptRow && total_amount > 0) {
           await conn.query(
             `INSERT INTO expense_details 
               (dept_id, category_id, year, expense_date, amount, description, approval_request_id) 
             VALUES (?, ?, YEAR(CURDATE()), CURDATE(), ?, ?, ?)`,
             [
-              deptRow.id,
-              categoryRow.category_id,
-              totalAmount,
+              deptRow.dept_id,
+              deptRow.category_hang,
+              total_amount,
               `결재 ID ${requestId} 최종 승인 합계`,
               requestId
             ]
@@ -731,7 +731,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             ctaUrl
           });
 
-          console.log(`📧 [handoff] #${mailPlan.requestId} → ${to} (cc:${cc || "-"})`);
+          console.log(`📧 [handoff] #${mailPlan.requestId} → ${to}`);
         }else if (mailPlan.type === "completed") {
           // 신청자 이메일 조회
           const [[applicant]] = await pool.query(
@@ -766,7 +766,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             ctaUrl
           });
 
-          console.log(`📧 [completed] #${mailPlan.requestId} → ${to} (cc:${cc || "-"})`);
+          console.log(`📧 [completed] #${mailPlan.requestId} → ${to}`);
         }
       } catch (mailErr) {
         console.error("❌ approval approve mail error:", mailErr);
