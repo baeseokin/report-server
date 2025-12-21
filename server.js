@@ -1907,31 +1907,56 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
 app.get("/api/budget-status", async (req, res) => {
   try {
     const year = req.query.year || new Date().getFullYear();
+    const { deptId } = req.query;
+    const conditions = ["d.parent_dept_id IS NOT NULL"];
+    const params = [year, year];
 
-    // ✅ 부서별 예산 & 지출 합계
+    if (deptId) {
+      conditions.push("d.id = ?");
+      params.push(deptId);
+    }
+
+        // ✅ 부서/관/항 기준 예산 & 지출 합계
     const [rows] = await pool.query(
       `
       SELECT 
           d.id AS dept_id,
           d.dept_name,
-          COALESCE(b.budget_amount,0) as total_budget,
-          COALESCE(ev.expense_amount,0) as total_expense,
-          COALESCE(b.budget_amount,0) - COALESCE(ev.expense_amount,0) AS remaining_amount
+          d.dept_cd,
+          gwan.category_id AS gwan_category_id,
+          gwan.category_name AS gwan_name,
+          hang.category_id AS hang_category_id,
+          hang.category_name AS hang_name,
+          COALESCE(b.total_budget,0) as total_budget,
+          COALESCE(ev.total_expense,0) as total_expense,
+          COALESCE(b.total_budget,0) - COALESCE(ev.total_expense,0) AS remaining_amount
       FROM departments d
-      LEFT JOIN ( select b.id, b.dept_id, b.category_id , b.year , b.budget_amount  
-			      from budgets b 
-			      INNER JOIN account_categories ac 
-			      	 ON b.dept_id = ac.dept_id and ac.category_id = b.category_id and ac.parent_id is NULL
-			      where b.year = ?
-      ) b on d.id = b.dept_id
-	    LEFT JOIN ( select e.dept_id, COALESCE(sum(e.amount),0) as expense_amount 
-			      from expense_details e 
-			      where e.year = ?
-			      group by e.dept_id
-      ) ev on d.id = ev.dept_id
-      where d.parent_dept_id is not null 
+      INNER JOIN account_categories hang
+        ON hang.dept_id = d.id
+       AND hang.level = '항'
+      INNER JOIN account_categories gwan
+        ON gwan.id = hang.parent_id
+       AND gwan.level = '관'
+      LEFT JOIN (
+        SELECT dept_id, category_id, COALESCE(SUM(budget_amount),0) AS total_budget
+          FROM budgets
+         WHERE year = ?
+         GROUP BY dept_id, category_id
+      ) b
+        ON b.dept_id = d.id
+       AND b.category_id = hang.category_id
+      LEFT JOIN (
+        SELECT dept_id, category_id, COALESCE(SUM(amount),0) AS total_expense
+          FROM expense_details
+         WHERE year = ?
+         GROUP BY dept_id, category_id
+      ) ev
+        ON ev.dept_id = d.id
+       AND ev.category_id = hang.category_id
+      WHERE ${conditions.join(" AND ")}
+      ORDER BY d.id, gwan.category_id, hang.category_id
       `,
-      [year, year]
+      params
     );
 
     res.json(rows);
