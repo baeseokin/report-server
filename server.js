@@ -1762,6 +1762,61 @@ app.post("/api/approval-lines", async (req, res) => {
     conn.release();
   }
 });
+
+// 단일 결재선 수정
+app.put("/api/approval-lines/:id", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const approvalLineId = req.params.id;
+  // camelCase, snake_case 모두 허용
+  const deptName = req.body.deptName ?? req.body.dept_name;
+  const approverRole = req.body.approverRole ?? req.body.approver_role;
+  const approverUserId = req.body.approverUserId ?? req.body.approver_user_id;
+  const orderNo = req.body.orderNo ?? req.body.order_no;
+
+  const updateFields = [];
+  const params = [];
+
+  if (deptName) {
+    updateFields.push("dept_name = ?");
+    params.push(deptName);
+  }
+  if (approverRole) {
+    updateFields.push("approver_role = ?");
+    params.push(approverRole);
+  }
+  if (approverUserId) {
+    updateFields.push("approver_user_id = ?");
+    params.push(approverUserId);
+  }
+  if (orderNo !== undefined) {
+    updateFields.push("order_no = ?");
+    params.push(orderNo);
+  }
+
+  if (updateFields.length === 0) {
+    return res.status(400).json({ success: false, message: "수정할 필드가 없습니다." });
+  }
+
+  try {
+    const [result] = await pool.query(
+      `UPDATE approval_line SET ${updateFields.join(", ")} WHERE id = ?`,
+      [...params, approvalLineId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "해당 결재선을 찾을 수 없습니다." });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ 결재선 수정 실패:", err);
+    res.status(500).json({ success: false, message: "결재선 수정 실패" });
+  }
+});
+
 /* ------------------------------------------------
    ✅ Account Categories API (CRUD)
 ------------------------------------------------ */
