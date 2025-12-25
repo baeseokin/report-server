@@ -1682,6 +1682,87 @@ app.delete("/api/departments/:id", async (req, res) => {
 });
 
 /* ------------------------------------------------
+   ✅ 결재선 관리 (ApprovalLineManagement.vue 대응)
+------------------------------------------------ */
+// 부서별 결재선 조회
+app.get("/api/approval-lines", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const { deptName } = req.query;
+
+    let query = `
+      SELECT al.id, al.dept_name, al.approver_role, al.approver_user_id, al.order_no,
+             u.user_name AS approver_user_name
+        FROM approval_line al
+        LEFT JOIN users u ON al.approver_user_id = u.user_id
+    `;
+    const params = [];
+
+    if (deptName) {
+      query += " WHERE al.dept_name = ?";
+      params.push(deptName);
+    }
+
+    query += " ORDER BY al.dept_name ASC, al.order_no ASC, al.id ASC";
+
+    const [rows] = await pool.query(query, params);
+    // 프론트에서 배열을 바로 받을 수 있도록 success 래퍼 없이 반환
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (err) {
+    console.error("❌ 결재선 조회 실패:", err);
+    res.status(500).json({ success: false, message: "결재선 조회 실패" });
+  }
+});
+
+// 부서별 결재선 저장 (전체 덮어쓰기)
+app.post("/api/approval-lines", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { deptName, lines } = req.body;
+
+  if (!deptName || !Array.isArray(lines)) {
+    return res.status(400).json({ success: false, message: "deptName과 lines는 필수입니다." });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    // 기존 결재선 제거 후 재삽입
+    await conn.query("DELETE FROM approval_line WHERE dept_name = ?", [deptName]);
+
+    const values = lines
+      .filter((line) => line?.approver_role && line?.approver_user_id)
+      .map((line, idx) => [
+        deptName,
+        line.approver_role,
+        line.approver_user_id,
+        line.order_no ?? idx + 1,
+      ]);
+
+    if (values.length > 0) {
+      await conn.query(
+        "INSERT INTO approval_line (dept_name, approver_role, approver_user_id, order_no) VALUES ?",
+        [values]
+      );
+    }
+
+    await conn.commit();
+    res.json({ success: true, count: values.length });
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ 결재선 저장 실패:", err);
+    res.status(500).json({ success: false, message: "결재선 저장 실패" });
+  } finally {
+    conn.release();
+  }
+});
+/* ------------------------------------------------
    ✅ Account Categories API (CRUD)
 ------------------------------------------------ */
 
