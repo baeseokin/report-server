@@ -1817,6 +1817,28 @@ app.put("/api/approval-lines/:id", async (req, res) => {
   }
 });
 
+// 단일 결재선 삭제
+app.delete("/api/approval-lines/:id", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const approvalLineId = req.params.id;
+
+  try {
+    const [result] = await pool.query("DELETE FROM approval_line WHERE id = ?", [approvalLineId]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "해당 결재선을 찾을 수 없습니다." });
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("❌ 결재선 삭제 실패:", err);
+    res.status(500).json({ success: false, message: "결재선 삭제 실패" });
+  }
+});
+
 /* ------------------------------------------------
    ✅ Account Categories API (CRUD)
 ------------------------------------------------ */
