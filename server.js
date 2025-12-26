@@ -1737,13 +1737,14 @@ app.post("/api/approval-lines", async (req, res) => {
     await conn.query("DELETE FROM approval_line WHERE dept_name = ?", [deptName]);
 
     const values = lines
-      .filter((line) => line?.approver_role && line?.approver_user_id)
-      .map((line, idx) => [
-        deptName,
-        line.approver_role,
-        line.approver_user_id,
-        line.order_no ?? idx + 1,
-      ]);
+      // ✅ camelCase / snake_case 모두 허용
+      .map((line, idx) => ({
+        approverRole: line?.approver_role ?? line?.approverRole,
+        approverUserId: line?.approver_user_id ?? line?.approverUserId,
+        orderNo: line?.order_no ?? line?.orderNo ?? idx + 1,
+      }))
+      .filter((line) => line.approverRole && line.approverUserId)
+      .map((line) => [deptName, line.approverRole, line.approverUserId, line.orderNo]);
 
     if (values.length > 0) {
       await conn.query(
