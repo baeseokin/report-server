@@ -425,8 +425,11 @@ app.post("/api/approvalList", async (req, res) => {
     const [rows] = await pool.query(
       `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, 
               ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
-              ar.category_gwan as selectedGwan, ar.category_hang as selectedHang
+              ar.category_gwan as selectedGwan, ar.category_hang as selectedHang,
+              cg.category_name as gwanName, ch.category_name as hangName
        FROM approval_requests ar
+       LEFT JOIN account_categories cg ON ar.category_gwan = cg.category_id
+       LEFT JOIN account_categories ch ON ar.category_hang = ch.category_id
        ${where}
        ORDER BY ar.request_date DESC, ar.id DESC
        LIMIT ? OFFSET ?`,
@@ -451,18 +454,33 @@ app.get("/api/approval/detail/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [requests] = await pool.query("SELECT * FROM approval_requests WHERE id = ?", [id]);
+    // ✅ 요청 정보 + 관/항 명칭 조회
+    const [requests] = await pool.query(`
+      SELECT ar.*, 
+             cg.category_name as gwan_name, 
+             ch.category_name as hang_name
+      FROM approval_requests ar
+      LEFT JOIN account_categories cg ON ar.category_gwan = cg.category_id
+      LEFT JOIN account_categories ch ON ar.category_hang = ch.category_id
+      WHERE ar.id = ?
+    `, [id]);
+
     if (requests.length === 0) {
       return res.status(404).json({ success: false, message: "데이터 없음" });
     }
 
     const request = requests[0];
 
-    // 항목 정보
-    const [items] = await pool.query(
-      "SELECT gwan, hang, mok, semok, detail, amount FROM approval_items WHERE request_id = ?",
-      [id]
-    );
+    // ✅ 항목 정보 + 목/세목 명칭 조회
+    const [items] = await pool.query(`
+      SELECT ai.gwan, ai.hang, ai.mok, ai.semok, ai.detail, ai.amount,
+             cm.category_name as mok_name,
+             cs.category_name as semok_name
+      FROM approval_items ai
+      LEFT JOIN account_categories cm ON ai.mok = cm.category_id
+      LEFT JOIN account_categories cs ON ai.semok = cs.category_id
+      WHERE ai.request_id = ?
+    `, [id]);
 
     // ✅ 첨부파일 정보 포함
     const [files] = await pool.query(
@@ -507,7 +525,13 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       aliasName: request.aliasName,
       selectedGwan: request.category_gwan,
       selectedHang: request.category_hang,
-      items,
+      gwanName: request.gwan_name, // 명칭 추가
+      hangName: request.hang_name, // 명칭 추가
+      items: items.map(i => ({
+        ...i,
+        mokName: i.mok_name,     // 명칭 추가
+        semokName: i.semok_name  // 명칭 추가
+      })),
       attachedFiles: files,
       approvalHistory: history,
       approvalLine,
