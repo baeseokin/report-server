@@ -554,16 +554,23 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     if (status === "결재진행중"){
 
       // ✅ 결재진행중인 경우, 로그인한 사용자가 실제 결재자인지 검증
-      if (current_approver_user_id !== req.session.user.userId) {
+      const isFinance = req.session.user.deptName === '재정부';
+      if (current_approver_user_id !== req.session.user.userId && !isFinance) {
         return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
       }
+
+      // ✅ 실제 결재자 정보 (대결 시 본인 정보 기록)
+      const actualApproverId = req.session.user.userId;
+      // [수정] 대결(Proxy)이더라도, 결재 이력에는 '현재 결재 단계의 역할'을 기록해야
+      // 결재선 UI에서 해당 칸에 서명이 올바르게 매핑됩니다.
+      const actualApproverRole = current_approver_role;
 
       // ✅ 승인 이력 기록
       await conn.query(
         `INSERT INTO approval_history 
           (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
         VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
-        [requestId, current_approver_role, current_approver_user_id, comment, signaturePath]
+        [requestId, actualApproverRole, actualApproverId, comment, signaturePath]
       );
 
       // ✅ 다음 결재자 찾기
@@ -813,11 +820,12 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
     const { current_approver_role, current_approver_user_id, status, author, dept_name, request_date, document_type, total_amount } = reqRows[0];
 
     // ✅ 로그인한 사용자가 실제 결재자인지 검증
-    if (status === "결재진행중" && current_approver_user_id !== req.session.user.userId) {
+    const isFinance = req.session.user.deptName === '재정부';
+    if (status === "결재진행중" && current_approver_user_id !== req.session.user.userId && !isFinance) {
       return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
     }
 
-    const approverRole = getUserPrimaryRole(req.session.user);
+    const approverRole = current_approver_role;
 
     // ✅ 결재반려 이력 기록
     await conn.query(
