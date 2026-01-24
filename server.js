@@ -653,9 +653,11 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           INNER JOIN departments d
             ON d.dept_name = ar.dept_name 
           INNER JOIN account_categories hang
-            ON hang.dept_id = d.id
+            ON hang.category_name = ar.category_hang 
             AND hang.level = '항'
-            AND hang.category_name = ar.category_hang 
+          INNER JOIN account_category_departments acd
+            ON acd.account_category_id = hang.id
+            AND acd.dept_id = d.id
           INNER JOIN account_categories gwan
             ON gwan.id = hang.parent_id
             AND gwan.level = '관'
@@ -1844,6 +1846,21 @@ app.delete("/api/approval-lines/:id", async (req, res) => {
    ✅ Account Categories API (CRUD)
 ------------------------------------------------ */
 
+// ✅ 전체 계정과목 조회 (마스터 관리용)
+app.get("/api/accountCategories", async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, category_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
+         FROM account_categories
+        ORDER BY category_id`
+    );
+    res.json({ success: true, categories: rows });
+  } catch (err) {
+    console.error("❌ accountCategories 전체 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // 특정 부서별 계정과목 조회 (기준일자 조건 포함)
 app.get("/api/accountCategories/:deptId", async (req, res) => {
   try {
@@ -1851,9 +1868,11 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
     const { date } = req.query;
 
     let query = `
-      SELECT id, category_id, dept_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
-        FROM account_categories
-       WHERE dept_id = ?
+      SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at,
+             (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ac.id) AS dept_ids
+        FROM account_categories ac
+        JOIN account_category_departments acd ON ac.id = acd.account_category_id
+       WHERE acd.dept_id = ?
     `;
     const params = [deptId];
 
@@ -1876,34 +1895,49 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
 
 // 계정과목 추가
 app.post("/api/accountCategories", async (req, res) => {
+  const conn = await pool.getConnection();
   try {
-    const { category_id, dept_id, parent_id, category_name, level, valid_from} = req.body;
-    const [result] = await pool.query(
-      `INSERT INTO account_categories (category_id, dept_id, parent_id, category_name, level, valid_from)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [category_id, dept_id, parent_id || null, category_name, level, valid_from || new Date()]
+    await conn.beginTransaction();
+    const { category_id, parent_id, category_name, level, valid_from} = req.body;
+    
+    const [result] = await conn.query(
+      `INSERT INTO account_categories (category_id, parent_id, category_name, level, valid_from)
+       VALUES (?, ?, ?, ?, ?)`,
+      [category_id, parent_id || null, category_name, level, valid_from || new Date()]
     );
+
+    await conn.commit();
     res.json({ success: true, id: result.insertId });
   } catch (err) {
+    await conn.rollback();
     console.error("❌ accountCategories 추가 실패:", err);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    conn.release();
   }
 });
 
 // 계정과목 수정
 app.put("/api/accountCategories/:id", async (req, res) => {
+  const conn = await pool.getConnection();
   try {
-    const { category_name, level, parent_id, valid_from, valid_to } = req.body;
-    await pool.query(
+    await conn.beginTransaction();
+    const { category_name } = req.body;
+    await conn.query(
       `UPDATE account_categories 
           SET category_name=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
         WHERE id=?`,
       [category_name, req.params.id]
     );
+
+    await conn.commit();
     res.json({ success: true });
   } catch (err) {
+    await conn.rollback();
     console.error("❌ accountCategories 수정 실패:", err);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    conn.release();
   }
 });
 
@@ -1935,6 +1969,36 @@ app.delete("/api/accountCategories/:id", async (req, res) => {
   }
 });
 
+// ✅ 부서별 계정과목 매핑 저장 (일괄 갱신)
+app.post("/api/departments/:deptId/account-mapping", async (req, res) => {
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const deptId = req.params.deptId;
+    const { categoryIds } = req.body; // [1, 2, 5, ...]
+
+    // 기존 매핑 삭제
+    await conn.query("DELETE FROM account_category_departments WHERE dept_id = ?", [deptId]);
+
+    // 신규 매핑 추가
+    if (Array.isArray(categoryIds) && categoryIds.length > 0) {
+      const values = categoryIds.map(catId => [catId, deptId]);
+      await conn.query(
+        `INSERT INTO account_category_departments (account_category_id, dept_id) VALUES ?`,
+        [values]
+      );
+    }
+
+    await conn.commit();
+    res.json({ success: true });
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ 매핑 저장 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  } finally {
+    conn.release();
+  }
+});
 
 // 부서별 예산 조회
 app.get("/api/budgets/:deptId", async (req, res) => {
@@ -2010,9 +2074,10 @@ app.get("/api/expenses/summary", async (req, res) => {
 
     // ✅ 최상위 계정(관) 가져오기
     const [rootRows] = await pool.query(
-      `SELECT category_id 
-         FROM account_categories 
-        WHERE parent_id IS NULL AND level='관' AND dept_id=?
+      `SELECT ac.category_id 
+         FROM account_categories ac
+         JOIN account_category_departments acd ON ac.id = acd.account_category_id
+        WHERE ac.parent_id IS NULL AND ac.level='관' AND acd.dept_id=?
         LIMIT 1`,
         [deptId]
     );
@@ -2072,11 +2137,12 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
 
     // ✅ 유효성: hangCategoryId가 '항'인지 체크 (유지)
     const [[hangRow]] = await pool.query(
-      `SELECT id
-         FROM account_categories
-        WHERE dept_id = ?
-          AND category_id = ?
-          AND level = '항'
+      `SELECT ac.id
+         FROM account_categories ac
+         JOIN account_category_departments acd ON ac.id = acd.account_category_id
+        WHERE acd.dept_id = ?
+          AND ac.category_id = ?
+          AND ac.level = '항'
         LIMIT 1`,
       [deptId, hangCategoryId]
     );
@@ -2155,8 +2221,9 @@ app.get("/api/budget-status", async (req, res) => {
           COALESCE(ev.total_expense,0) as total_expense,
           COALESCE(b.total_budget,0) - COALESCE(ev.total_expense,0) AS remaining_amount
       FROM departments d
+      INNER JOIN account_category_departments acd ON acd.dept_id = d.id
       INNER JOIN account_categories hang
-        ON hang.dept_id = d.id
+        ON hang.id = acd.account_category_id
        AND hang.level = '항'
       INNER JOIN account_categories gwan
         ON gwan.id = hang.parent_id
