@@ -2008,15 +2008,17 @@ app.post("/api/departments/:deptId/account-mapping", async (req, res) => {
   }
 });
 
-// 부서별 예산 조회
-app.get("/api/budgets/:deptId", async (req, res) => {
+// ✅ 계정별 예산 조회 (전사 공통)
+app.get("/api/budgets", async (req, res) => {
   try {
     const { year } = req.query;
+    // 부서별로 입력된 데이터가 있을 수 있으므로 SUM으로 합산하여 조회
     const [rows] = await pool.query(
-      `SELECT id, dept_id, category_id, year, budget_amount
+      `SELECT category_id, year, SUM(budget_amount) as budget_amount
          FROM budgets
-        WHERE dept_id = ? AND year = ?`,
-      [req.params.deptId, year]
+        WHERE year = ?
+        GROUP BY category_id, year`,
+      [year]
     );
     res.json({ success: true, budgets: rows });
   } catch (err) {
@@ -2028,12 +2030,12 @@ app.get("/api/budgets/:deptId", async (req, res) => {
 // 예산 입력/수정 (Upsert)
 app.post("/api/budgets", async (req, res) => {
   try {
-    const { dept_id, category_id, year, budget_amount } = req.body;
+    const { category_id, year, budget_amount } = req.body;
     await pool.query(
-      `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
-       VALUES (?, ?, ?, ?)
+      `INSERT INTO budgets (category_id, year, budget_amount)
+       VALUES (?, ?, ?)
        ON DUPLICATE KEY UPDATE budget_amount=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')`,
-      [dept_id, category_id, year, budget_amount, budget_amount]
+      [category_id, year, budget_amount, budget_amount]
     );
     res.json({ success: true });
   } catch (err) {
@@ -2044,25 +2046,33 @@ app.post("/api/budgets", async (req, res) => {
 
 // 일괄 예산 저장 (Upsert)
 app.post("/api/budgets/bulk", async (req, res) => {
+  const conn = await pool.getConnection();
   try {
     const budgets = req.body.budgets;
     if (!Array.isArray(budgets) || budgets.length === 0) {
+      conn.release();
       return res.status(400).json({ success: false, error: "예산 데이터 없음" });
     }
 
-    const values = budgets.map(b => [b.dept_id, b.category_id, b.year, b.budget_amount]);
+    await conn.beginTransaction();
 
-    await pool.query(
-      `INSERT INTO budgets (dept_id, category_id, year, budget_amount)
+    const values = budgets.map(b => [b.category_id, b.year, b.budget_amount]);
+
+    await conn.query(
+      `INSERT INTO budgets (category_id, year, budget_amount)
        VALUES ?
        ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount), updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')`,
       [values]
     );
 
+    await conn.commit();
     res.json({ success: true });
   } catch (err) {
+    await conn.rollback();
     console.error("❌ bulk 예산 저장 실패:", err);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    conn.release();
   }
 });
 
@@ -2097,12 +2107,12 @@ app.get("/api/expenses/summary", async (req, res) => {
     const rootCategoryId = rootRows[0].category_id;
     console.log("rootCategoryId :",rootCategoryId);
 
-    // ✅ 예산 총액 (budgets)
+    // ✅ 예산 총액 (budgets) - 부서 조건 제거 (전사 예산)
     const [[budgetRow]] = await pool.query(
       `SELECT COALESCE(SUM(budget_amount),0) AS totalBudget
          FROM budgets
-        WHERE dept_id=? AND year=? AND category_id=?`,
-      [deptId, year, rootCategoryId]
+        WHERE year=? AND category_id=?`,
+      [year, rootCategoryId]
     );
     console.log("budgetRow :",budgetRow);
 
@@ -2161,14 +2171,13 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
         .json({ success: false, message: "선택한 category_id가 '항'이 아닙니다." });
     }
 
-    // ✅ 예산 합계: 선택한 항(category_id)만
+    // ✅ 예산 합계: 선택한 항(category_id)만 (부서 조건 제거)
     const [[budgetRow]] = await pool.query(
       `SELECT COALESCE(SUM(budget_amount), 0) AS totalBudget
          FROM budgets
-        WHERE dept_id = ?
-          AND year = ?
+        WHERE year = ?
           AND category_id = ?`,
-      [deptId, year, hangCategoryId]
+      [year, hangCategoryId]
     );
 
     // ✅ 지출 합계: 선택한 항(category_id)만
@@ -2237,13 +2246,12 @@ app.get("/api/budget-status", async (req, res) => {
         ON gwan.id = hang.parent_id
        AND gwan.level = '관'
       LEFT JOIN (
-        SELECT dept_id, category_id, COALESCE(SUM(budget_amount),0) AS total_budget
+        SELECT category_id, COALESCE(SUM(budget_amount),0) AS total_budget
           FROM budgets
          WHERE year = ?
-         GROUP BY dept_id, category_id
+         GROUP BY category_id
       ) b
-        ON b.dept_id = d.id
-       AND b.category_id = hang.category_id
+        ON b.category_id = hang.category_id
       LEFT JOIN (
         SELECT dept_id, category_id, COALESCE(SUM(amount),0) AS total_expense
           FROM expense_details
