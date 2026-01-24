@@ -407,7 +407,7 @@ app.post("/api/approvalList", async (req, res) => {
     }
 
     // ✅ 현재 결재자
-    if (status === "결재진행중" && approverUserId) {
+    if (deptName != "" && status === "결재진행중" && approverUserId) {
       where += " AND ar.current_approver_user_id = ?";
       params.push(approverUserId);
     }
@@ -417,7 +417,7 @@ app.post("/api/approvalList", async (req, res) => {
       params
     );
 
-    //console.log("where :", where);
+    console.log("where :", where);
 
     const totalPages = Math.ceil(count / pageSize);
     const offset = (page - 1) * pageSize;
