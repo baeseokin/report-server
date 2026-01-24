@@ -1858,7 +1858,7 @@ app.delete("/api/approval-lines/:id", async (req, res) => {
 app.get("/api/accountCategories", async (req, res) => {
   try {
     const [rows] = await pool.query(
-      `SELECT id, category_id, parent_id, category_name, level, valid_from, valid_to, created_at, updated_at
+      `SELECT id, category_id, parent_id, category_name, level, owner_dept_id, valid_from, valid_to, created_at, updated_at
          FROM account_categories
         ORDER BY category_id`
     );
@@ -1876,7 +1876,7 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
     const { date } = req.query;
 
     let query = `
-      SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at,
+      SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at,
              (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ac.id) AS dept_ids
         FROM account_categories ac
         JOIN account_category_departments acd ON ac.id = acd.account_category_id
@@ -1930,12 +1930,12 @@ app.put("/api/accountCategories/:id", async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const { category_name } = req.body;
+    const { category_name, owner_dept_id } = req.body;
     await conn.query(
       `UPDATE account_categories 
-          SET category_name=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
+          SET category_name=?, owner_dept_id=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
         WHERE id=?`,
-      [category_name, req.params.id]
+      [category_name, owner_dept_id, req.params.id]
     );
 
     await conn.commit();
