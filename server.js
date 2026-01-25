@@ -2258,6 +2258,8 @@ app.get("/api/budget-status", async (req, res) => {
           gwan.category_name AS gwan_name,
           hang.category_id AS hang_category_id,
           hang.category_name AS hang_name,
+          hang.owner_dept_id,
+          owner_d.dept_name AS owner_dept_name,
           COALESCE(b.total_budget,0) as total_budget,
           COALESCE(ev.total_expense,0) as total_expense,
           COALESCE(b.total_budget,0) - COALESCE(ev.total_expense,0) AS remaining_amount
@@ -2269,6 +2271,7 @@ app.get("/api/budget-status", async (req, res) => {
       INNER JOIN account_categories gwan
         ON gwan.id = hang.parent_id
        AND gwan.level = '관'
+      LEFT JOIN departments owner_d ON hang.owner_dept_id = owner_d.id
       LEFT JOIN (
         SELECT category_id, COALESCE(SUM(budget_amount),0) AS total_budget
           FROM budgets
