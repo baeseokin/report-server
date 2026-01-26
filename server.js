@@ -562,7 +562,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     await conn.beginTransaction();
 
     const [reqRows] = await conn.query(
-      `SELECT dept_name, current_approver_role, current_approver_user_id, document_type, author, request_date, status, total_amount
+      `SELECT dept_name, current_approver_role, current_approver_user_id, document_type, author, request_date, status, total_amount, category_hang
          FROM approval_requests 
         WHERE id=? FOR UPDATE`,
       [requestId]
@@ -572,7 +572,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     }
 
     const reqRow = reqRows[0];
-    const { dept_name, current_approver_role, current_approver_user_id, status, total_amount } = reqRow;
+    const { dept_name, current_approver_role, current_approver_user_id, status, total_amount, category_hang } = reqRow;
 
     //console.log("/api/approval/approve - status :", status);
     if (status === "결재진행중"){
@@ -677,36 +677,18 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           [requestId]
         );
 
-        // ✅ dept_id, category_gwan, category_hang 조회
-        const [[deptRow]] = await conn.query(
-          `SELECT d.id as dept_id, gwan.category_id as category_gwan,  hang.category_id as category_hang
-          FROM approval_requests ar
-          INNER JOIN departments d
-            ON d.dept_name = ar.dept_name 
-          INNER JOIN account_categories hang
-            ON hang.category_name = ar.category_hang 
-            AND hang.level = '항'
-          INNER JOIN account_category_departments acd
-            ON acd.account_category_id = hang.id
-            AND acd.dept_id = d.id
-          INNER JOIN account_categories gwan
-            ON gwan.id = hang.parent_id
-            AND gwan.level = '관'
-            AND gwan.category_name  = ar.category_gwan 
-          where ar.id =?`,
-          [requestId]
-        );
+        // ✅ dept_id 조회 (부서명 기준)
+        const [[deptObj]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [dept_name]);
 
-
-
-        if (deptRow && total_amount > 0) {
+        // ✅ expense_details에 지출 내역 저장 (request의 category_hang 사용)
+        if (deptObj && category_hang && total_amount > 0) {
           await conn.query(
             `INSERT INTO expense_details 
               (dept_id, category_id, year, expense_date, amount, description, approval_request_id) 
             VALUES (?, ?, YEAR(CURDATE()), CURDATE(), ?, ?, ?)`,
             [
-              deptRow.dept_id,
-              deptRow.category_hang,
+              deptObj.id,
+              category_hang,
               total_amount,
               `결재 ID ${requestId} 최종 승인 합계`,
               requestId
