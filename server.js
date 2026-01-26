@@ -2274,13 +2274,16 @@ app.get("/api/budget-status", async (req, res) => {
         ON gwan.id = hang.parent_id
        AND gwan.level = '관'
       LEFT JOIN departments owner_d ON hang.owner_dept_id = owner_d.id
+      LEFT JOIN account_categories child_cat
+        ON child_cat.parent_id = hang.id
+       AND child_cat.owner_dept_id = d.id
       LEFT JOIN (
         SELECT category_id, COALESCE(SUM(budget_amount),0) AS total_budget
           FROM budgets
          WHERE year = ?
          GROUP BY category_id
       ) b
-        ON b.category_id = hang.category_id
+        ON b.category_id = COALESCE(child_cat.category_id, hang.category_id)
       LEFT JOIN (
         SELECT dept_id, category_id, COALESCE(SUM(amount),0) AS total_expense
           FROM expense_details
@@ -2288,7 +2291,7 @@ app.get("/api/budget-status", async (req, res) => {
          GROUP BY dept_id, category_id
       ) ev
         ON ev.dept_id = d.id
-       AND ev.category_id = hang.category_id
+       AND ev.category_id = COALESCE(child_cat.category_id, hang.category_id)
       WHERE ${conditions.join(" AND ")}
       ORDER BY d.id, gwan.category_id, hang.category_id
       `,
