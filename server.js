@@ -1394,10 +1394,10 @@ app.get("/api/users/:id/signature/default", async (req, res) => {
 
   const targetUserId = req.params.id;
 
-  // (선택) 관리자 또는 본인만 허용
-  const isAdmin = Array.isArray(req.session.user.roles) &&
-    req.session.user.roles.some(r => r.role_name === "관리자");
-  if (!isAdmin && String(req.session.user.id) !== String(targetUserId)) {
+  // (선택) 관리자, 재정부 또는 본인만 허용
+  const isAuthorized = Array.isArray(req.session.user.roles) &&
+    req.session.user.roles.some(r => r.role_name === "관리자" || r.role_name === "재정부");
+  if (!isAuthorized && String(req.session.user.id) !== String(targetUserId)) {
     return res.status(403).json({ message: "권한 없음" });
   }
 
@@ -1421,10 +1421,10 @@ app.post("/api/users/:id/signatures", uploadSignature.single("file"), async (req
   const targetUserId = req.params.id;
   const isDefault = req.body.isDefault === "1" ? 1 : 0;
 
-  // (선택) 관리자 또는 본인만 허용
-  const isAdmin = Array.isArray(req.session.user.roles) &&
-    req.session.user.roles.some(r => r.role_name === "관리자");
-  if (!isAdmin && String(req.session.user.id) !== String(targetUserId)) {
+  // (선택) 관리자, 재정부 또는 본인만 허용
+  const isAuthorized = Array.isArray(req.session.user.roles) &&
+    req.session.user.roles.some(r => r.role_name === "관리자" || r.role_name === "재정부");
+  if (!isAuthorized && String(req.session.user.id) !== String(targetUserId)) {
     return res.status(403).json({ message: "권한 없음" });
   }
   if (!req.file) return res.status(400).json({ message: "파일이 없습니다." });
@@ -2177,41 +2177,43 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
         .json({ success: false, message: "deptId, year, hangCategoryId 필요" });
     }
 
-    // ✅ 유효성: hangCategoryId가 '항'인지 체크 (유지)
-    const [[hangRow]] = await pool.query(
-      `SELECT ac.id
-         FROM account_categories ac
-         JOIN account_category_departments acd ON ac.id = acd.account_category_id
-        WHERE acd.dept_id = ?
-          AND ac.category_id = ?
-          AND ac.level = '항'
-        LIMIT 1`,
-      [deptId, hangCategoryId]
+    // ✅ 1. 항(Hang) 정보 조회 (ID, Owner)
+    const [[hangNode]] = await pool.query(
+      "SELECT id, owner_dept_id FROM account_categories WHERE category_id = ?",
+      [hangCategoryId]
     );
 
-    if (!hangRow) {
-      return res
-        .status(400)
-        .json({ success: false, message: "선택한 category_id가 '항'이 아닙니다." });
+    let targetCategoryId = hangCategoryId;
+
+    // ✅ 2. Owner가 일치하지 않으면 하위 계정(Mok) 중 Owner가 일치하는 것 조회
+    if (hangNode && String(hangNode.owner_dept_id) !== String(deptId)) {
+      const [children] = await pool.query(
+        "SELECT category_id FROM account_categories WHERE parent_id = ? AND owner_dept_id = ? LIMIT 1",
+        [hangNode.id, deptId]
+      );
+      
+      if (children.length > 0) {
+        targetCategoryId = children[0].category_id;
+      }
     }
 
-    // ✅ 예산 합계: 선택한 항(category_id)만 (부서 조건 제거)
+    // ✅ 3. 예산 합계: targetCategoryId 사용
     const [[budgetRow]] = await pool.query(
       `SELECT COALESCE(SUM(budget_amount), 0) AS totalBudget
          FROM budgets
         WHERE year = ?
           AND category_id = ?`,
-      [year, hangCategoryId]
+      [year, targetCategoryId]
     );
 
-    // ✅ 지출 합계: 선택한 항(category_id)만
+    // ✅ 4. 지출 합계: targetCategoryId 사용
     const [[expenseRow]] = await pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS totalExpense
          FROM expense_details
         WHERE dept_id = ?
           AND year = ?
           AND category_id = ?`,
-      [deptId, year, hangCategoryId]
+      [deptId, year, targetCategoryId]
     );
 
     const totalBudget = Number(budgetRow.totalBudget) || 0;
