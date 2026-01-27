@@ -2337,6 +2337,58 @@ app.get("/api/budget-status", async (req, res) => {
   }
 });
 
+/* ------------------------------------------------
+   📊 부서 예산집행 현황 API (DeptBudgetStatus.vue용)
+   GET /api/dept-budget-status?deptId=1&year=2025
+------------------------------------------------ */
+app.get("/api/dept-budget-status", async (req, res) => {
+  try {
+    const { deptId, year } = req.query;
+    if (!deptId || !year) {
+      return res.status(400).json({ success: false, message: "deptId, year 필요" });
+    }
+
+    // 1. 예산 조회 (BudgetsGrid와 동일 로직: 전사 예산)
+    //    단, 여기서는 부서별 예산 현황이므로 해당 부서가 Owner인 계정만 필터링하는 것은 프론트엔드 로직을 따름.
+    //    서버에서는 전체 예산을 내려주거나, 필요한 경우 필터링.
+    //    BudgetsGrid는 /api/budgets (전체)를 호출하고 프론트에서 매핑함.
+    //    여기서도 동일하게 전체 예산을 가져갑니다.
+    const [budgetRows] = await pool.query(
+      `SELECT category_id, SUM(budget_amount) as budget_amount
+         FROM budgets
+        WHERE year = ?
+        GROUP BY category_id`,
+      [year]
+    );
+
+    // 2. 지출 조회 (approval_items 기준, status='결재완료' or '재정부이관완료')
+    //    mok, semok이 ACC로 시작하면 해당 코드로 집계
+    //    그 외(직접입력 등)는 'ETC' 또는 상위 코드로 집계해야 함.
+    //    요청사항: "mok, semok 이 'ACC'로 시작하지 않는 금액은 '기타' 를 추가하고 여기에 합산"
+    //    -> 이를 위해 별도의 '기타' 카테고리 ID를 정의하거나, 프론트엔드에서 처리할 수 있게 데이터를 내려줌.
+    
+    //    여기서는 approval_items를 조회하여 내려줍니다.
+    //    조건: 해당 부서(dept_id), 해당 연도(year), 결재완료 상태
+    const [expenseRows] = await pool.query(
+      `SELECT ai.gwan, ai.hang, ai.mok, ai.semok, ai.amount
+         FROM approval_items ai
+         JOIN approval_requests ar ON ai.request_id = ar.id
+        WHERE ai.dept_id = ?
+          AND ai.year = ?
+          AND ar.status = '재정부이관완료'`,
+      [deptId, year]
+    );
+
+    res.json({
+      success: true,
+      budgets: budgetRows,
+      expenses: expenseRows
+    });
+  } catch (err) {
+    console.error("❌ 부서 예산집행 현황 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 /* ------------------------------------------------
    ✅ 서버 실행
