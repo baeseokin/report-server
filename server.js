@@ -191,6 +191,14 @@ app.post("/api/approval", async (req, res) => {
     const { documentType, deptName, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
       req.body;
 
+    // ✅ 1. 부서 ID 조회 및 연도 추출 (approval_items 저장용)
+    const [[deptRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
+    if (!deptRow) {
+      throw new Error(`부서 정보를 찾을 수 없습니다: ${deptName}`);
+    }
+    const deptId = deptRow.id;
+    const requestYear = new Date(date).getFullYear();
+
   
     // approval_requests 저장 (status = 결재진행중)
     const [result] = await conn.query(
@@ -256,11 +264,13 @@ app.post("/api/approval", async (req, res) => {
         i.semok || null,
         i.detail || null,
         i.amount || null,
+        deptId,      // ✅ 추가
+        requestYear  // ✅ 추가
       ]);
 
       await conn.query(
         `INSERT INTO approval_items 
-         (request_id, gwan, hang, mok, semok, detail, amount) 
+         (request_id, gwan, hang, mok, semok, detail, amount, dept_id, year) 
          VALUES ?`,
         [itemInserts]
       );
@@ -2115,10 +2125,17 @@ app.get("/api/expenses/summary", async (req, res) => {
 
     // ✅ 예산 총액 (budgets) - 부서 조건 제거 (전사 예산)
     const [[budgetRow]] = await pool.query(
-      `SELECT COALESCE(SUM(budget_amount),0) AS totalBudget
-         FROM budgets
-        WHERE year=? AND category_id=?`,
-      [year, rootCategoryId]
+      `WITH RECURSIVE sub_cats (id, category_id) AS (
+          SELECT id, category_id FROM account_categories WHERE category_id = ?
+          UNION ALL
+          SELECT ac.id, ac.category_id FROM account_categories ac
+          INNER JOIN sub_cats sc ON ac.parent_id = sc.id
+       )
+       SELECT COALESCE(SUM(b.budget_amount),0) AS totalBudget
+       FROM budgets b
+       JOIN sub_cats sc ON b.category_id = sc.category_id
+       WHERE b.year=?`,
+      [rootCategoryId, year]
     );
     console.log("budgetRow :",budgetRow);
 
@@ -2179,24 +2196,42 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
       }
     }
 
+    console.log("targetCategoryId :", targetCategoryId);
+
     // ✅ 3. 예산 합계: targetCategoryId 사용
     const [[budgetRow]] = await pool.query(
-      `SELECT COALESCE(SUM(budget_amount), 0) AS totalBudget
-         FROM budgets
-        WHERE year = ?
-          AND category_id = ?`,
-      [year, targetCategoryId]
+      `WITH RECURSIVE sub_cats (id, category_id) AS (
+          SELECT id, category_id FROM account_categories WHERE category_id = ?
+          UNION ALL
+          SELECT ac.id, ac.category_id FROM account_categories ac
+          INNER JOIN sub_cats sc ON ac.parent_id = sc.id
+       )
+       SELECT COALESCE(SUM(b.budget_amount), 0) AS totalBudget
+       FROM budgets b
+       JOIN sub_cats sc ON b.category_id = sc.category_id
+       WHERE b.year = ?`,
+      [targetCategoryId, year]
     );
+
+    console.log("budgetRow :", budgetRow);
 
     // ✅ 4. 지출 합계: targetCategoryId 사용
     const [[expenseRow]] = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS totalExpense
-         FROM expense_details
-        WHERE dept_id = ?
-          AND year = ?
-          AND category_id = ?`,
-      [deptId, year, targetCategoryId]
+      `WITH RECURSIVE sub_cats (id, category_id) AS (
+          SELECT id, category_id FROM account_categories WHERE category_id = ?
+          UNION ALL
+          SELECT ac.id, ac.category_id FROM account_categories ac
+          INNER JOIN sub_cats sc ON ac.parent_id = sc.id
+       )
+       SELECT COALESCE(SUM(ed.amount), 0) AS totalExpense
+         FROM expense_details ed
+         JOIN sub_cats sc ON ed.category_id = sc.category_id
+        WHERE ed.dept_id = ?
+          AND ed.year = ?`,
+      [hangCategoryId, deptId, year]
     );
+
+    console.log("expenseRow :", expenseRow);
 
     const totalBudget = Number(budgetRow.totalBudget) || 0;
     const totalExpense = Number(expenseRow.totalExpense) || 0;
@@ -2222,18 +2257,35 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
 app.get("/api/budget-status", async (req, res) => {
   try {
     const year = req.query.year || new Date().getFullYear();
-    const { deptId } = req.query;
+
+    // ✅ [전체 계정 모드] 기존 로직 유지
     const conditions = ["d.parent_dept_id IS NOT NULL"];
     const params = [year, year];
-
-    if (deptId) {
-      conditions.push("d.id = ?");
-      params.push(deptId);
-    }
 
         // ✅ 부서/관/항 기준 예산 & 지출 합계
     const [rows] = await pool.query(
       `
+      WITH RECURSIVE category_descendants (root_id, root_category_id, id, category_id) AS (
+          SELECT id, category_id, id, category_id FROM account_categories
+          UNION ALL
+          SELECT cd.root_id, cd.root_category_id, ac.id, ac.category_id
+          FROM account_categories ac
+          JOIN category_descendants cd ON ac.parent_id = cd.id
+      ),
+      budget_agg AS (
+          SELECT cd.root_category_id, SUM(b.budget_amount) as total_budget
+          FROM category_descendants cd
+          JOIN budgets b ON cd.category_id = b.category_id
+          WHERE b.year = ?
+          GROUP BY cd.root_category_id
+      ),
+      expense_agg AS (
+          SELECT cd.root_category_id, ed.dept_id, SUM(ed.amount) as total_expense
+          FROM category_descendants cd
+          JOIN expense_details ed ON cd.category_id = ed.category_id
+          WHERE ed.year = ?
+          GROUP BY cd.root_category_id, ed.dept_id
+      )
       SELECT 
           d.id AS dept_id,
           d.dept_name,
@@ -2244,9 +2296,10 @@ app.get("/api/budget-status", async (req, res) => {
           hang.category_name AS hang_name,
           hang.owner_dept_id,
           owner_d.dept_name AS owner_dept_name,
-          COALESCE(b.total_budget,0) as total_budget,
-          COALESCE(ev.total_expense,0) as total_expense,
-          COALESCE(b.total_budget,0) - COALESCE(ev.total_expense,0) AS remaining_amount
+          SUM(COALESCE(b.total_budget,0)) as total_budget,
+          MAX(COALESCE(b_full.total_budget,0)) as hang_total_budget,
+          MAX(COALESCE(ev.total_expense,0)) as total_expense,
+          SUM(COALESCE(b.total_budget,0)) - MAX(COALESCE(ev.total_expense,0)) AS remaining_amount
       FROM departments d
       INNER JOIN account_category_departments acd ON acd.dept_id = d.id
       INNER JOIN account_categories hang
@@ -2259,22 +2312,19 @@ app.get("/api/budget-status", async (req, res) => {
       LEFT JOIN account_categories child_cat
         ON child_cat.parent_id = hang.id
        AND child_cat.owner_dept_id = d.id
-      LEFT JOIN (
-        SELECT category_id, COALESCE(SUM(budget_amount),0) AS total_budget
-          FROM budgets
-         WHERE year = ?
-         GROUP BY category_id
-      ) b
-        ON b.category_id = COALESCE(child_cat.category_id, hang.category_id)
-      LEFT JOIN (
-        SELECT dept_id, category_id, COALESCE(SUM(amount),0) AS total_expense
-          FROM expense_details
-         WHERE year = ?
-         GROUP BY dept_id, category_id
-      ) ev
+      LEFT JOIN budget_agg b
+        ON b.root_category_id = COALESCE(child_cat.category_id, hang.category_id)
+      LEFT JOIN budget_agg b_full
+        ON b_full.root_category_id = hang.category_id
+      LEFT JOIN expense_agg ev
         ON ev.dept_id = d.id
-       AND ev.category_id = COALESCE(child_cat.category_id, hang.category_id)
+       AND ev.root_category_id = hang.category_id
       WHERE ${conditions.join(" AND ")}
+      GROUP BY 
+          d.id, d.dept_name, d.dept_cd,
+          gwan.category_id, gwan.category_name,
+          hang.category_id, hang.category_name, hang.owner_dept_id,
+          owner_d.dept_name
       ORDER BY d.id, gwan.category_id, hang.category_id
       `,
       params
