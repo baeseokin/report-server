@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
       - name: report-form-ui
-        image: baeseokin/report-form-ui:0.6  # 또는 dockerhub 이미지
+        image: baeseokin/report-form-ui:0.7  # 또는 dockerhub 이미지
         imagePullPolicy: Always
         ports:
         - containerPort: 80
