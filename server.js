@@ -188,8 +188,20 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { documentType, deptName, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
+    const { documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
       req.body;
+    // ✅ 클라이언트가 선택한 부서명 사용 (재정부 등이 다른 부서 선택 시). body 문자열이 있으면 무조건 사용, 없을 때만 세션
+    const bodyDeptName = req.body.deptName ?? req.body.dept_name;
+    const deptName =
+      typeof bodyDeptName === "string" && bodyDeptName.trim() !== ""
+        ? bodyDeptName.trim()
+        : req.session?.user?.deptName ?? null;
+    console.log("POST /api/approval body.deptName:", req.body.deptName, "body.dept_name:", req.body.dept_name, "→ deptName:", deptName);
+    if (!deptName) {
+      await conn.rollback();
+      conn.release();
+      return res.status(400).json({ success: false, message: "부서 정보가 없습니다." });
+    }
 
     // ✅ 1. 부서 ID 조회 및 연도 추출 (approval_items 저장용)
     const [[deptRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
