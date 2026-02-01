@@ -1,12 +1,14 @@
 #!/bin/bash
 
-# === .env 파일 로드 ===
-ENV_FILE="/Users/baeseokin/report-server/.env"
+# === 스크립트 위치 기준 경로 (Mac / WSL 공통) ===
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPORT_SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="${REPORT_SERVER_DIR}/.env"
+BACKUP_DIR="$SCRIPT_DIR"
 
+# === .env 파일 로드 ===
 if [ -f "$ENV_FILE" ]; then
-    # .env 안의 변수들을 자동으로 export
     set -o allexport
-    # shell이 직접 파싱하므로 주석(#) / 따옴표 / 한글 모두 안전하게 처리됨
     . "$ENV_FILE"
     set +o allexport
 else
@@ -19,12 +21,11 @@ USER="${DB_USER__development}"
 PASSWORD="${DB_PASSWORD__development}"
 HOST="${DB_HOST__development}"
 PORT="${DB_PORT__development}"
-BACKUP_DIR="/Users/baeseokin/report-server/data"
 DATE="$(date +"%Y%m%d_%H%M")"
 
 # 백업 파일명
 BACKUP_FILE="all_databases_${DATE}.sql"
-LOG_FILE="${BACKUP_DIR}/backup.log"ß
+LOG_FILE="${BACKUP_DIR}/backup.log"
 
 # 백업 디렉토리 생성
 mkdir -p "$BACKUP_DIR"
