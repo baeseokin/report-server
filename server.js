@@ -1035,58 +1035,62 @@ app.get("/api/files/:filename", async (req, res) => {
    ✅ 로그인/로그아웃/세션
 ------------------------------------------------ */
 app.post("/api/login", async (req, res) => {
-  const { userId, password } = req.body;
-  console.log("📥 로그인 시도:", userId, "IP:", req.ip);
-
   try {
-      const [rows] = await pool.query(
-        `SELECT u.*, d.id AS dept_id, d.dept_name
-          FROM users u
-          LEFT JOIN departments d ON u.dept_name = d.dept_name
-          WHERE u.user_id = ?`,
-        [userId]
-      );
+    const { userId, password } = req.body || {};
+    if (!userId || password === undefined) {
+      return res.status(400).json({ success: false, message: "아이디와 비밀번호를 입력하세요." });
+    }
+    console.log("📥 로그인 시도:", userId, "IP:", req.ip);
 
-      if (rows.length === 0) {
-        console.warn("❌ 로그인 실패: ID 없음", userId);
-        return res.status(401).json({ success: false, message: "ID 없음" });
-      }
+    const [rows] = await pool.query(
+      `SELECT u.*, d.id AS dept_id, d.dept_name
+        FROM users u
+        LEFT JOIN departments d ON u.dept_name = d.dept_name
+        WHERE u.user_id = ?`,
+      [userId]
+    );
 
-      const user = rows[0];
+    if (rows.length === 0) {
+      console.warn("❌ 로그인 실패: ID 없음", userId);
+      return res.status(401).json({ success: false, message: "ID 없음" });
+    }
 
-      //console.log("user:", user);
+    const user = rows[0];
 
-      const match = await bcrypt.compare(password, user.password_hash);
-      if (!match) {
-        console.warn("❌ 로그인 실패: 비밀번호 불일치", userId);
-        return res.status(401).json({ success: false, message: "비밀번호 불일치" });
-      }
-      const [roles] = await pool.query(
-        `SELECT r.id, r.role_name 
-        FROM roles r 
-        JOIN user_roles ur ON r.id = ur.role_id 
-        WHERE ur.user_id = ?`,
-        [user.id]
-      );
+    if (!user.password_hash) {
+      console.warn("❌ 로그인 실패: 비밀번호 미설정", userId);
+      return res.status(401).json({ success: false, message: "비밀번호가 설정되지 않은 계정입니다." });
+    }
 
-      req.session.user = {
-        id: user.id,
-        userId: user.user_id,
-        userName: user.user_name,
-        email: user.email,
-        deptName: user.dept_name,
-        deptId: user.dept_id,
-        roles: roles.length > 0 ? roles : [],
-      };
-      console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
-      //console.log("✅ req.session.user :", req.session.user );
-      res.json({ success: true, user: req.session.user });
+    const match = await bcrypt.compare(String(password), user.password_hash);
+    if (!match) {
+      console.warn("❌ 로그인 실패: 비밀번호 불일치", userId);
+      return res.status(401).json({ success: false, message: "비밀번호 불일치" });
+    }
 
+    const [roles] = await pool.query(
+      `SELECT r.id, r.role_name 
+       FROM roles r 
+       JOIN user_roles ur ON r.id = ur.role_id 
+       WHERE ur.user_id = ?`,
+      [user.id]
+    );
+
+    req.session.user = {
+      id: user.id,
+      userId: user.user_id,
+      userName: user.user_name,
+      email: user.email,
+      deptName: user.dept_name,
+      deptId: user.dept_id,
+      roles: roles.length > 0 ? roles : [],
+    };
+    console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
+    return res.json({ success: true, user: req.session.user });
   } catch (error) {
-    console.error("❌ 로그인 처리 오류:", error);
-    res.status(500).json({ success: false, message: "로그인 처리 실패" });
+    console.error("❌ 로그인 처리 오류:", error.message || error);
+    return res.status(500).json({ success: false, message: "로그인 처리 실패" });
   }
-
 });
 
 app.post("/api/logout", (req, res) => {
