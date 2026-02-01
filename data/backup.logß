@@ -12,3 +12,5 @@
 [2026-01-27 23:06:05] 백업 완료 → /Users/baeseokin/report-server/data/all_databases_20260127_2306.sql.gz
 [2026-01-29 22:34:03] 전체 DB 백업 시작
 [2026-01-29 22:34:04] 백업 완료 → /Users/baeseokin/report-server/data/all_databases_20260129_2234.sql.gz
+[2026-02-01 15:29:00] 전체 DB 백업 시작
+[2026-02-01 15:29:00] 백업 완료 → /Users/baeseokin/report-server/data/all_databases_20260201_1529.sql.gz
