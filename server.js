@@ -203,6 +203,11 @@ app.post("/api/approval", async (req, res) => {
       return res.status(400).json({ success: false, message: "부서 정보가 없습니다." });
     }
 
+    // ✅ 재정부 권한 사용자가 타부서 결재요청 시 진행상태를 결재완료로 바로 처리
+    const userDeptName = req.session?.user?.deptName ?? "";
+    const isFinanceUserRequestingOtherDept = userDeptName === "재정부" && deptName !== "재정부";
+    const initialStatus = isFinanceUserRequestingOtherDept ? "결재완료" : "결재진행중";
+
     // ✅ 1. 부서 ID 조회 및 연도 추출 (approval_items 저장용)
     const [[deptRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
     if (!deptRow) {
@@ -212,12 +217,12 @@ app.post("/api/approval", async (req, res) => {
     const requestYear = new Date(date).getFullYear();
 
   
-    // approval_requests 저장 (status = 결재진행중)
+    // approval_requests 저장 (재정부→타부서 요청 시 status = 결재완료, 그 외 결재진행중)
     const [result] = await conn.query(
       `INSERT INTO approval_requests 
        (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, '결재진행중', ?, ?)`,
-      [documentType, deptName, author, date, totalAmount, comment, aliasName, selectedGwan, selectedHang]
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang]
     );
 
     const requestId = result.insertId;
@@ -255,8 +260,8 @@ app.post("/api/approval", async (req, res) => {
 
     //console.log("approval > nextApprover :", nextApprover);
 
-    // ✅ approval_requests에 다음 결재자 업데이트
-    if (nextApprover) {
+    // ✅ approval_requests에 다음 결재자 업데이트 (결재진행중일 때만)
+    if (initialStatus === "결재진행중" && nextApprover) {
       await conn.query(
         `UPDATE approval_requests 
             SET current_approver_role = ?, current_approver_user_id = ? 
@@ -291,44 +296,46 @@ app.post("/api/approval", async (req, res) => {
     await conn.commit();
     res.json({ success: true, id: requestId });
 
-    // ✅ 커밋 후 비동기 발송
-    setImmediate(async () => {
-      try {
-        // 다음 결재자 이메일 조회
-        const [[nextUser]] = await pool.query(
-          `SELECT user_name, email FROM users WHERE user_id = ? LIMIT 1`,
-          [nextApprover?.approver_user_id]
-        );
-        const to = nextUser?.email;
-        console.log("/api/approval - nextUser:", nextUser);
-        console.log("/api/approval - to:", to);
+    // ✅ 커밋 후 비동기 발송 (결재진행중일 때만 다음 결재자에게 이관 메일 발송)
+    if (initialStatus === "결재진행중") {
+      setImmediate(async () => {
+        try {
+          // 다음 결재자 이메일 조회
+          const [[nextUser]] = await pool.query(
+            `SELECT user_name, email FROM users WHERE user_id = ? LIMIT 1`,
+            [nextApprover?.approver_user_id]
+          );
+          const to = nextUser?.email;
+          console.log("/api/approval - nextUser:", nextUser);
+          console.log("/api/approval - to:", to);
 
-        if (!to) {
-          console.warn(`📭 approval #${requestId}: no next approver email`);
-          return;
+          if (!to) {
+            console.warn(`📭 approval #${requestId}: no next approver email`);
+            return;
+          }
+          
+          const title = `결재 진행 요청 - ${documentType} (요청자: ${author})`;
+          const bodyText =
+              `다음 결재 단계로 이관되었습니다.\n\n` +
+              `부서: ${deptName}\n` +
+              `작성자: ${author}\n` +
+              `요청일자: ${date}\n` +
+              `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
+              (comment ? `결재 코멘트: ${comment}\n` : "");
+          const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
+          await sendApprovalDecisionMail({
+            to,
+            title,
+            bodyText,
+            requestId,
+            ctaUrl
+          });
+          
+        } catch (e) {
+          console.error("❌ approval mail send error:", e.message);
         }
-        
-        const title = `결재 진행 요청 - ${documentType} (요청자: ${author})`;
-        const bodyText =
-            `다음 결재 단계로 이관되었습니다.\n\n` +
-            `부서: ${deptName}\n` +
-            `작성자: ${author}\n` +
-            `요청일자: ${date}\n` +
-            `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
-            (comment ? `결재 코멘트: ${comment}\n` : "");
-        const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
-        await sendApprovalDecisionMail({
-          to,
-          title,
-          bodyText,
-          requestId,
-          ctaUrl
-        });
-        
-      } catch (e) {
-        console.error("❌ approval mail send error:", e.message);
+      });
     }
-  });
 
   } catch (err) {
     await conn.rollback();
@@ -684,12 +691,14 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     }else if(status === "결재완료"){
 
-      // ✅ 승인 이력 기록
+      // ✅ 승인 이력 기록 (재정부→타부서로 결재완료된 건은 current_approver가 NULL이므로 로그인 사용자 사용)
+      const historyApproverRole = current_approver_role != null ? current_approver_role : (req.session.user.roles?.[0]?.role_name ?? "재정부");
+      const historyApproverUserId = current_approver_user_id != null ? current_approver_user_id : req.session.user.userId;
       await conn.query(
         `INSERT INTO approval_history 
           (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
         VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
-        [requestId, current_approver_role, current_approver_user_id, comment, signaturePath]
+        [requestId, historyApproverRole, historyApproverUserId, comment, signaturePath]
       );      
         // 재정부 결재자 → 재정부이관완료 처리
         await conn.query(
