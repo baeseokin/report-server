@@ -703,14 +703,19 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
         const [[deptObj]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [dept_name]);
 
         // ✅ expense_details에 지출 내역 저장 (request의 category_hang 사용)
+        // year는 결재일자가 아닌 '요청(보고) 연도'를 사용해야 budget-status(기준년도)와 dept-budget-status(approval_items.year)가 일치함
         if (deptObj && category_hang && total_amount > 0) {
+          const [[yrRow]] = await conn.query("SELECT year FROM approval_items WHERE request_id = ? LIMIT 1", [requestId]);
+          const expenseYear = yrRow?.year != null ? yrRow.year : new Date().getFullYear();
+
           await conn.query(
             `INSERT INTO expense_details 
               (dept_id, category_id, year, expense_date, amount, description, approval_request_id) 
-            VALUES (?, ?, YEAR(CURDATE()), CURDATE(), ?, ?, ?)`,
+            VALUES (?, ?, ?, CURDATE(), ?, ?, ?)`,
             [
               deptObj.id,
               category_hang,
+              expenseYear,
               total_amount,
               `결재 ID ${requestId} 최종 승인 합계`,
               requestId
