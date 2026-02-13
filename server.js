@@ -2391,22 +2391,32 @@ app.get("/api/dept-budget-status", async (req, res) => {
       [year]
     );
 
-    // 2. 지출 조회 (approval_items 기준, status='결재완료' or '재정부이관완료')
-    //    mok, semok이 ACC로 시작하면 해당 코드로 집계
-    //    그 외(직접입력 등)는 'ETC' 또는 상위 코드로 집계해야 함.
-    //    요청사항: "mok, semok 이 'ACC'로 시작하지 않는 금액은 '기타' 를 추가하고 여기에 합산"
-    //    -> 이를 위해 별도의 '기타' 카테고리 ID를 정의하거나, 프론트엔드에서 처리할 수 있게 데이터를 내려줌.
-    
-    //    여기서는 approval_items를 조회하여 내려줍니다.
-    //    조건: 해당 부서(dept_id), 해당 연도(year), 결재완료 상태
+    // 2. 지출 조회: "해당 부서에 배정된 계정과목"으로 집행된 지출만 포함 (결재 신청 부서 무관)
+    //    - 세목(semok)이 ACC로 시작하면: semok이 이 부서 배정 계정인 건
+    //    - 세목이 커스텀/비ACC면: 목(mok)이 이 부서 배정 계정인 건
+    //    -> 부서="관리부"일 때도 ACC04130202에 회우부가 신청한 지출이 표시됨
     const [expenseRows] = await pool.query(
       `SELECT ai.gwan, ai.hang, ai.mok, ai.semok, ai.amount
          FROM approval_items ai
          JOIN approval_requests ar ON ai.request_id = ar.id
-        WHERE ai.dept_id = ?
-          AND ai.year = ?
-          AND ar.status = '재정부이관완료'`,
-      [deptId, year]
+        WHERE ai.year = ?
+          AND ar.status = '재정부이관완료'
+          AND (
+            EXISTS (
+              SELECT 1 FROM account_categories ac
+              JOIN account_category_departments acd ON ac.id = acd.account_category_id
+              WHERE acd.dept_id = ? AND ac.category_id = ai.semok
+            )
+            OR (
+              (ai.semok IS NULL OR ai.semok NOT LIKE 'ACC%')
+              AND EXISTS (
+                SELECT 1 FROM account_categories ac
+                JOIN account_category_departments acd ON ac.id = acd.account_category_id
+                WHERE acd.dept_id = ? AND ac.category_id = ai.mok
+              )
+            )
+          )`,
+      [year, deptId, deptId]
     );
 
     res.json({
