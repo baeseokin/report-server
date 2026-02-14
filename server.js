@@ -869,14 +869,16 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
       return res.status(403).json({ success: false, message: "현재 결재자가 아닙니다." });
     }
 
-    const approverRole = current_approver_role;
+    // ✅ current_approver_role이 NULL일 수 있음(예: 재정부 이관 전) → 세션 사용
+    const approverRole = current_approver_role != null ? current_approver_role : (req.session.user.roles?.[0]?.role_name ?? "재정부");
+    const approverUserId = current_approver_user_id != null ? current_approver_user_id : req.session.user.userId;
 
     // ✅ 결재반려 이력 기록
     await conn.query(
       `INSERT INTO approval_history 
          (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
        VALUES (?, ?, ?, ?, ?, '반려', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
-      [requestId, approverRole, req.session.user.userId, comment, signaturePath]
+      [requestId, approverRole, approverUserId, comment, signaturePath]
     );
 
     // ✅ 결재 요청 반려 처리
@@ -885,7 +887,7 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
           SET status='결재반려', updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00'),
               current_approver_role=?, current_approver_user_id=?
         WHERE id=?`,
-      [approverRole, req.session.user.userId, requestId]
+      [approverRole, approverUserId, requestId]
     );
 
     await conn.commit();
