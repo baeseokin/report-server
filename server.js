@@ -517,12 +517,14 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       [id]
     );
 
-    // ✅ 결재 이력
+    // ✅ 결재 이력 (처리자 이름: users JOIN)
     const [history] = await pool.query(
-      `SELECT approver_user_id, approver_role, comment, signature_path, approved_at, status
-         FROM approval_history
-        WHERE request_id = ?
-        ORDER BY approved_at ASC`,
+      `SELECT ah.approver_user_id, ah.approver_role, ah.comment, ah.signature_path, ah.approved_at, ah.status,
+              u.user_name AS approver_user_name
+         FROM approval_history ah
+         LEFT JOIN users u ON ah.approver_user_id = u.user_id
+        WHERE ah.request_id = ?
+        ORDER BY ah.approved_at ASC`,
       [id]
     );
 
