@@ -693,9 +693,9 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     }else if(status === "결재완료"){
 
-      // ✅ 승인 이력 기록 (재정부→타부서로 결재완료된 건은 current_approver가 NULL이므로 로그인 사용자 사용)
-      const historyApproverRole = current_approver_role != null ? current_approver_role : (req.session.user.roles?.[0]?.role_name ?? "재정부");
-      const historyApproverUserId = current_approver_user_id != null ? current_approver_user_id : req.session.user.userId;
+      // ✅ 승인 이력 기록: 이 블록은 재정부가 '결재완료' 건을 이관 승인할 때만 진입하므로, 항상 로그인 사용자(재정부) 정보로 기록
+      const historyApproverRole = req.session.user.roles?.[0]?.role_name ?? "재정부";
+      const historyApproverUserId = req.session.user.userId;
       await conn.query(
         `INSERT INTO approval_history 
           (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
