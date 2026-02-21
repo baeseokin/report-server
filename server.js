@@ -528,13 +528,12 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       [id]
     );
 
-    // ✅ 결재선 (approval_line) - 부서 기준 + 재정부 규칙 + order_no 정렬
+    // ✅ 결재선 (approval_line) - 부서 기준 + order_no 정렬 (재정부 포함)
     const [approvalLine] = await pool.query(
       `
       SELECT id, dept_name, approver_role, approver_user_id, order_no
         FROM approval_line
        WHERE dept_name = ?
-         and not (dept_name <> '재정부' AND approver_role = '재정부')
        ORDER BY order_no ASC, id ASC
       `,
       [request.dept_name]
