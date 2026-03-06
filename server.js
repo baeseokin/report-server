@@ -21,13 +21,13 @@ const { sendApprovalDecisionMail } = require("./services/sendApprovalDecisionMai
 
 if (!process.env.NODE_ENV) {
   const isK8s = !!process.env.KUBERNETES_SERVICE_HOST || /pod|deploy|stateful|sts/i.test(os.hostname());
-  console.log("isK8s:",isK8s);
-  console.log("!!process.env.KUBERNETES_SERVICE_HOST:",!!process.env.KUBERNETES_SERVICE_HOST);
-  console.log("/pod|deploy|stateful|sts/i.test(os.hostname()):",/pod|deploy|stateful|sts/i.test(os.hostname()));
+  console.log("isK8s:", isK8s);
+  console.log("!!process.env.KUBERNETES_SERVICE_HOST:", !!process.env.KUBERNETES_SERVICE_HOST);
+  console.log("/pod|deploy|stateful|sts/i.test(os.hostname()):", /pod|deploy|stateful|sts/i.test(os.hostname()));
   process.env.NODE_ENV = isK8s ? "production" : "development";
 }
 
-console.error("process.env.NODE_ENV:",process.env.NODE_ENV);
+console.error("process.env.NODE_ENV:", process.env.NODE_ENV);
 
 // ✅ NODE_ENV 확정 후 env 헬퍼 로드 (순서 중요!)
 const { envPick, envNumber, ENV } = require("./env");
@@ -94,7 +94,7 @@ const pool = mysql.createPool({
   timezone: envPick("DB_TIMEZONE", "Z")
 });
 console.log(`🌍 NODE_ENV: ${process.env.NODE_ENV}  (ENV helper: ${ENV})`);
-console.log(`📦 DB → ${envPick("DB_HOST","localhost")}:${envNumber("DB_PORT",3306)} / ${envPick("DB_NAME","test")}`);
+console.log(`📦 DB → ${envPick("DB_HOST", "localhost")}:${envNumber("DB_PORT", 3306)} / ${envPick("DB_NAME", "test")}`);
 
 
 // 업로드 폴더 생성
@@ -216,7 +216,7 @@ app.post("/api/approval", async (req, res) => {
     const deptId = deptRow.id;
     const requestYear = new Date(date).getFullYear();
 
-  
+
     // approval_requests 저장 (재정부→타부서 요청 시 status = 결재완료, 그 외 결재진행중)
     const [result] = await conn.query(
       `INSERT INTO approval_requests 
@@ -313,16 +313,16 @@ app.post("/api/approval", async (req, res) => {
             console.warn(`📭 approval #${requestId}: no next approver email`);
             return;
           }
-          
+
           const title = `결재 진행 요청 - ${documentType} (요청자: ${author})`;
           const bodyText =
-              `다음 결재 단계로 이관되었습니다.\n\n` +
-              `부서: ${deptName}\n` +
-              `작성자: ${author}\n` +
-              `요청일자: ${date}\n` +
-              `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
-              (comment ? `결재 코멘트: ${comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
+            `다음 결재 단계로 이관되었습니다.\n\n` +
+            `부서: ${deptName}\n` +
+            `작성자: ${author}\n` +
+            `요청일자: ${date}\n` +
+            `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
+            (comment ? `결재 코멘트: ${comment}\n` : "");
+          const ctaUrl = process.env.APP_BASE_URL + "/approvalStatus";
           await sendApprovalDecisionMail({
             to,
             title,
@@ -330,7 +330,7 @@ app.post("/api/approval", async (req, res) => {
             requestId,
             ctaUrl
           });
-          
+
         } catch (e) {
           console.error("❌ approval mail send error:", e.message);
         }
@@ -435,10 +435,18 @@ app.post("/api/approvalList", async (req, res) => {
       }
     }
 
-    // ✅ 현재 결재자
-    if (deptName != "" && status === "결재진행중" && approverUserId) {
-      where += " AND ar.current_approver_user_id = ?";
-      params.push(approverUserId);
+    // ✅ 현재 결재자 (보안 강화)
+    const isFinance = req.session.user?.deptName === "재정부";
+    if (status === "결재진행중") {
+      if (approverUserId) {
+        where += " AND ar.current_approver_user_id = ?";
+        params.push(approverUserId);
+      } else if (!isFinance) {
+        // 일반 사용자가 결재자 ID 누락 시 본인 ID로 강제 필터링
+        where += " AND ar.current_approver_user_id = ?";
+        params.push(req.session.user?.userId);
+      }
+      // 재정부 사용자가 '타부서 청구' 조회 시(approverUserId 없음) 필터 생략하여 전체 조회 허용
     }
 
     const [[{ count }]] = await pool.query(
@@ -605,7 +613,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     const { dept_name, current_approver_role, current_approver_user_id, status, total_amount, category_hang } = reqRow;
 
     //console.log("/api/approval/approve - status :", status);
-    if (status === "결재진행중"){
+    if (status === "결재진행중") {
 
       // ✅ 결재진행중인 경우, 로그인한 사용자가 실제 결재자인지 검증
       const isFinance = req.session.user.deptName === '재정부';
@@ -642,7 +650,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
       );
 
       //console.log("/api/approval/approve - nextRows :", nextRows);
-    
+
       if (nextRows.length > 0) {
         // 다음 결재자 지정
         await conn.query(
@@ -666,8 +674,8 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           approvedBy: req.session.user.userName,
           comment: comment || "",
         };
-        
-      }else {
+
+      } else {
         // 마지막 결재자 → 결재완료 처리
         await conn.query(
           `UPDATE approval_requests
@@ -688,9 +696,9 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           comment: comment || "",
         };
 
-      } 
+      }
 
-    }else if(status === "결재완료"){
+    } else if (status === "결재완료") {
 
       // ✅ 승인 이력 기록: 이 블록은 재정부가 '결재완료' 건을 이관 승인할 때만 진입하므로, 항상 로그인 사용자(재정부) 정보로 기록
       const historyApproverRole = req.session.user.roles?.[0]?.role_name ?? "재정부";
@@ -700,39 +708,39 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
         VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
         [requestId, historyApproverRole, historyApproverUserId, comment, signaturePath]
-      );      
-        // 재정부 결재자 → 재정부이관완료 처리
-        await conn.query(
-          `UPDATE approval_requests
+      );
+      // 재정부 결재자 → 재정부이관완료 처리
+      await conn.query(
+        `UPDATE approval_requests
             SET status='재정부이관완료', updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
           WHERE id=?`,
-          [requestId]
-        );
+        [requestId]
+      );
 
-        // ✅ dept_id 조회 (부서명 기준)
-        const [[deptObj]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [dept_name]);
+      // ✅ dept_id 조회 (부서명 기준)
+      const [[deptObj]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [dept_name]);
 
-        // ✅ expense_details에 지출 내역 저장 (request의 category_hang 사용)
-        // year는 결재일자가 아닌 '요청(보고) 연도'를 사용해야 budget-status(기준년도)와 dept-budget-status(approval_items.year)가 일치함
-        if (deptObj && category_hang && total_amount > 0) {
-          const [[yrRow]] = await conn.query("SELECT year FROM approval_items WHERE request_id = ? LIMIT 1", [requestId]);
-          const expenseYear = yrRow?.year != null ? yrRow.year : new Date().getFullYear();
+      // ✅ expense_details에 지출 내역 저장 (request의 category_hang 사용)
+      // year는 결재일자가 아닌 '요청(보고) 연도'를 사용해야 budget-status(기준년도)와 dept-budget-status(approval_items.year)가 일치함
+      if (deptObj && category_hang && total_amount > 0) {
+        const [[yrRow]] = await conn.query("SELECT year FROM approval_items WHERE request_id = ? LIMIT 1", [requestId]);
+        const expenseYear = yrRow?.year != null ? yrRow.year : new Date().getFullYear();
 
-          await conn.query(
-            `INSERT INTO expense_details 
+        await conn.query(
+          `INSERT INTO expense_details 
               (dept_id, category_id, year, expense_date, amount, description, approval_request_id) 
             VALUES (?, ?, ?, CURDATE(), ?, ?, ?)`,
-            [
-              deptObj.id,
-              category_hang,
-              expenseYear,
-              total_amount,
-              `결재 ID ${requestId} 최종 승인 합계`,
-              requestId
-            ]
-          );
-        }
-    }     
+          [
+            deptObj.id,
+            category_hang,
+            expenseYear,
+            total_amount,
+            `결재 ID ${requestId} 최종 승인 합계`,
+            requestId
+          ]
+        );
+      }
+    }
 
     await conn.commit();
     res.json({ success: true, message: "결재가 완료되었습니다." });
@@ -772,8 +780,8 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
             `이전 결재자: ${mailPlan.approvedBy}\n` +
             (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL+"/approvalStatus";
-        
+          const ctaUrl = process.env.APP_BASE_URL + "/approvalStatus";
+
           await sendApprovalDecisionMail({
             to,
             //cc,
@@ -784,7 +792,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           });
 
           console.log(`📧 [handoff] #${mailPlan.requestId} → ${to}`);
-        }else if (mailPlan.type === "completed") {
+        } else if (mailPlan.type === "completed") {
           // 신청자 이메일 조회
           const [[applicant]] = await pool.query(
             `SELECT email FROM users WHERE user_name=? LIMIT 1`,
@@ -807,7 +815,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
             `최종 승인자: ${mailPlan.approvedBy}\n` +
             (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL+"/approvalList";  
+          const ctaUrl = process.env.APP_BASE_URL + "/approvalList";
 
           await sendApprovalDecisionMail({
             to,
@@ -898,38 +906,38 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
     // ───────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
-        
-          // 신청자 이메일 조회
-          const [[applicant]] = await pool.query(
-            `SELECT email FROM users WHERE user_name=? LIMIT 1`,
-            [author]
-          );
-          const to = applicant?.email;
-        
-          if (!to) {
-            console.warn(`📭 approval #${requestId}: no applicant email`);
-            return;
-          }
 
-          const title = `결재 요청 반려 - ${document_type} (요청일자: ${request_date})`;
-          const bodyText =
-            `결재요청이 최종 반려되었습니다.\n\n` +
-            `부서: ${dept_name}\n` +
-            `작성자: ${author}\n` +
-            `요청일자: ${request_date}\n` +
-            `청구총액: ₩${Number(total_amount).toLocaleString("ko-KR")}\n` +
-            `최종 승인자: ${req.session.user.userName}\n` +
-            (comment ? `결재 코멘트: ${comment}\n` : "");
+        // 신청자 이메일 조회
+        const [[applicant]] = await pool.query(
+          `SELECT email FROM users WHERE user_name=? LIMIT 1`,
+          [author]
+        );
+        const to = applicant?.email;
 
-          await sendApprovalDecisionMail({
-            to,
-            title,
-            bodyText,
-            requestId: requestId,
-          });
+        if (!to) {
+          console.warn(`📭 approval #${requestId}: no applicant email`);
+          return;
+        }
 
-          console.log(`📧 [completed] #${requestId} → ${to}`);
-        
+        const title = `결재 요청 반려 - ${document_type} (요청일자: ${request_date})`;
+        const bodyText =
+          `결재요청이 최종 반려되었습니다.\n\n` +
+          `부서: ${dept_name}\n` +
+          `작성자: ${author}\n` +
+          `요청일자: ${request_date}\n` +
+          `청구총액: ₩${Number(total_amount).toLocaleString("ko-KR")}\n` +
+          `최종 승인자: ${req.session.user.userName}\n` +
+          (comment ? `결재 코멘트: ${comment}\n` : "");
+
+        await sendApprovalDecisionMail({
+          to,
+          title,
+          bodyText,
+          requestId: requestId,
+        });
+
+        console.log(`📧 [completed] #${requestId} → ${to}`);
+
       } catch (mailErr) {
         console.error("❌ approval approve mail error:", mailErr);
       }
@@ -1590,9 +1598,9 @@ app.get("/api/public/roles", async (req, res) => {
         inner join users u on d.dept_name  = u.dept_name
         inner join user_roles ur on u.id = ur.user_id 
         inner join roles r on r.id = ur.role_id 
-        where d.id = ? ` 
-      ,[deptId]);
-      res.json(rows);
+        where d.id = ? `
+      , [deptId]);
+    res.json(rows);
   } catch (err) {
     console.error("역할 조회 실패:", err);
     res.status(500).json({ success: false });
@@ -1955,8 +1963,8 @@ app.post("/api/accountCategories", async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const { category_id, parent_id, category_name, level, valid_from} = req.body;
-    
+    const { category_id, parent_id, category_name, level, valid_from } = req.body;
+
     const [result] = await conn.query(
       `INSERT INTO account_categories (category_id, parent_id, category_name, level, valid_from)
        VALUES (?, ?, ?, ?, ?)`,
@@ -2133,7 +2141,7 @@ app.post("/api/budgets/bulk", async (req, res) => {
 app.get("/api/expenses/summary", async (req, res) => {
   try {
     const { deptId, year } = req.query;
-    console.log("deptId :",deptId);
+    console.log("deptId :", deptId);
 
     if (!deptId || !year) {
       return res.status(400).json({ success: false, message: "deptId, year 필요" });
@@ -2146,15 +2154,15 @@ app.get("/api/expenses/summary", async (req, res) => {
          JOIN account_category_departments acd ON ac.id = acd.account_category_id
         WHERE ac.parent_id IS NULL AND ac.level='관' AND acd.dept_id=?
         LIMIT 1`,
-        [deptId]
+      [deptId]
     );
-    console.log("rootRows :",rootRows);
+    console.log("rootRows :", rootRows);
 
     if (rootRows.length === 0) {
       return res.json({ success: true, totalBudget: 0, totalExpense: 0 });
     }
     const rootCategoryId = rootRows[0].category_id;
-    console.log("rootCategoryId :",rootCategoryId);
+    console.log("rootCategoryId :", rootCategoryId);
 
     // ✅ 예산 총액 (budgets) - 부서 조건 제거 (전사 예산)
     const [[budgetRow]] = await pool.query(
@@ -2170,7 +2178,7 @@ app.get("/api/expenses/summary", async (req, res) => {
        WHERE b.year=?`,
       [rootCategoryId, year]
     );
-    console.log("budgetRow :",budgetRow);
+    console.log("budgetRow :", budgetRow);
 
     // ✅ 지출 총액 (expense_details)
     const [[expenseRow]] = await pool.query(
@@ -2223,7 +2231,7 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
         "SELECT category_id FROM account_categories WHERE parent_id = ? AND owner_dept_id = ? LIMIT 1",
         [hangNode.id, deptId]
       );
-      
+
       if (children.length > 0) {
         targetCategoryId = children[0].category_id;
       }
@@ -2295,7 +2303,7 @@ app.get("/api/budget-status", async (req, res) => {
     const conditions = ["d.parent_dept_id IS NOT NULL"];
     const params = [year, year];
 
-        // ✅ 부서/관/항 기준 예산 & 지출 합계
+    // ✅ 부서/관/항 기준 예산 & 지출 합계
     const [rows] = await pool.query(
       `
       WITH RECURSIVE category_descendants (root_id, root_category_id, id, category_id) AS (
