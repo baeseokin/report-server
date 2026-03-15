@@ -1932,14 +1932,34 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
     const deptId = req.params.deptId;
     const { date } = req.query;
 
+    // ✅ RECURSIVE CTE를 사용하여 매핑된 계정 및 지출이 있는 계정의 모든 상위(부모) 계정까지 포함
     let query = `
-      SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at,
-             (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ac.id) AS dept_ids
-        FROM account_categories ac
-        JOIN account_category_departments acd ON ac.id = acd.account_category_id
-       WHERE acd.dept_id = ?
+      WITH RECURSIVE category_tree AS (
+        -- 초기항: 직접 매핑되었거나 지출 내역이 있는 계정
+        SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at
+          FROM account_categories ac
+          LEFT JOIN account_category_departments acd ON ac.id = acd.account_category_id
+         WHERE acd.dept_id = ?
+            OR ac.category_id IN (
+               SELECT DISTINCT ai.semok FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
+               UNION SELECT ai.mok FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
+               UNION SELECT ai.hang FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
+               UNION SELECT ai.gwan FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
+            )
+        
+        UNION
+        
+        -- 재귀항: 위에서 선택된 계정들의 부모 계정들을 추적
+        SELECT p.id, p.category_id, p.parent_id, p.category_name, p.level, p.owner_dept_id, p.valid_from, p.valid_to, p.created_at, p.updated_at
+          FROM account_categories p
+          INNER JOIN category_tree c ON c.parent_id = p.id
+      )
+      SELECT DISTINCT ct.*,
+             (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ct.id) AS dept_ids
+        FROM category_tree ct
+       WHERE 1=1
     `;
-    const params = [deptId];
+    const params = [deptId, deptId, deptId, deptId, deptId];
 
     // ✅ 기준일자가 있으면 유효기간 조건 추가
     if (date) {
@@ -2413,18 +2433,15 @@ app.get("/api/dept-budget-status", async (req, res) => {
         WHERE ai.year = ?
           AND ar.status = '재정부이관완료'
           AND (
+            -- 1. 해당 부서가 신청(기안)한 지출 (ar.dept_name으로 조인)
+            EXISTS (SELECT 1 FROM departments d WHERE d.dept_name = ar.dept_name AND d.id = ?)
+            OR
+            -- 2. 해당 부서가 관리(배정)하는 계정으로 집행된 지출
             EXISTS (
-              SELECT 1 FROM account_categories ac
-              JOIN account_category_departments acd ON ac.id = acd.account_category_id
-              WHERE acd.dept_id = ? AND ac.category_id = ai.semok
-            )
-            OR (
-              (ai.semok IS NULL OR ai.semok NOT LIKE 'ACC%')
-              AND EXISTS (
-                SELECT 1 FROM account_categories ac
-                JOIN account_category_departments acd ON ac.id = acd.account_category_id
-                WHERE acd.dept_id = ? AND ac.category_id = ai.mok
-              )
+              SELECT 1 FROM account_category_departments acd
+              INNER JOIN account_categories ac ON ac.id = acd.account_category_id
+              WHERE acd.dept_id = ? 
+                AND (ac.category_id = ai.semok OR ac.category_id = ai.mok OR ac.category_id = ai.hang OR ac.category_id = ai.gwan)
             )
           )`,
       [year, deptId, deptId]
