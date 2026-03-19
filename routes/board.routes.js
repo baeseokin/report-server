@@ -94,6 +94,15 @@ module.exports = function(pool, upload) {
       // 조회수 증가
       await pool.query(`UPDATE boards SET view_count = view_count + 1 WHERE id = ?`, [boardId]);
 
+      // ✅ 사용자별 읽음 처리
+      if (req.session.user) {
+        await pool.query(`
+          INSERT INTO board_views (user_id, board_id) 
+          VALUES (?, ?) 
+          ON DUPLICATE KEY UPDATE viewed_at = CURRENT_TIMESTAMP
+        `, [req.session.user.userId, boardId]);
+      }
+
       const [boardRows] = await pool.query(`
         SELECT id, title, content, author_id, author_name, view_count, created_at, updated_at
         FROM boards WHERE id = ?
