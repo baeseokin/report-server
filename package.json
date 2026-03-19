@@ -21,6 +21,7 @@
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",
     "nodemailer": "^7.0.9",
-    "pinia": "^3.0.3"
+    "pinia": "^3.0.3",
+    "sanitize-html": "^2.17.2"
   }
 }
