@@ -2508,6 +2508,15 @@ app.get("/api/notices/:id", async (req, res) => {
     // 조회수 1 증가 (쿠키/세션 기반 중복 방지는 생략하고 단순 증가)
     await pool.query("UPDATE notices SET view_count = view_count + 1 WHERE id = ?", [id]);
 
+    // ✅ 사용자별 읽음 처리
+    if (req.session.user) {
+      await pool.query(`
+        INSERT INTO notice_views (user_id, notice_id) 
+        VALUES (?, ?) 
+        ON DUPLICATE KEY UPDATE viewed_at = CURRENT_TIMESTAMP
+      `, [req.session.user.userId, id]);
+    }
+
     const [notices] = await pool.query("SELECT * FROM notices WHERE id = ?", [id]);
     if (notices.length === 0) {
       return res.status(404).json({ success: false, message: "공지사항을 찾을 수 없습니다." });
@@ -2646,6 +2655,89 @@ app.delete("/api/notices/:id", async (req, res) => {
 ─────────────────────────────────────────────────────────── */
 const boardRoutes = require("./routes/board.routes")(pool, upload);
 app.use("/api/boards", boardRoutes);
+
+/* ------------------------------------------------
+   ✅ 포탈 초화면 요약 API
+------------------------------------------------ */
+app.get("/api/portal/summary", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+  try {
+    const userId = req.session.user.userId;
+    const isFinance = req.session.user?.deptName === "재정부";
+
+    // 청구목록 카운트 (본인 또는 재정부 전체)
+    let approvalWhere = isFinance ? "" : "WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)";
+    const approvalParams = isFinance ? [] : [userId];
+    const [[{ approvalCount }]] = await pool.query(
+      `SELECT COUNT(*) AS approvalCount FROM approval_requests ar ${approvalWhere}`,
+      approvalParams
+    );
+
+    // 내결재목록 카운트 (current_approver_user_id = 본인)
+    const [[{ myApprovalCount }]] = await pool.query(
+      `SELECT COUNT(*) AS myApprovalCount FROM approval_requests WHERE current_approver_user_id = ? AND status = '결재진행중'`,
+      [userId]
+    );
+
+    // 읽지 않은 공지사항 카운트
+    const [[{ unreadNoticeCount }]] = await pool.query(`
+      SELECT COUNT(*) AS unreadNoticeCount 
+      FROM notices n
+      WHERE n.id NOT IN (SELECT notice_id FROM notice_views WHERE user_id = ?)
+    `, [userId]);
+    const [noticeRecent] = await pool.query(
+      "SELECT id, title, created_at FROM notices ORDER BY created_at DESC LIMIT 5"
+    );
+
+    // 읽지 않은 게시글 카운트
+    const [[{ unreadBoardCount }]] = await pool.query(`
+      SELECT COUNT(*) AS unreadBoardCount 
+      FROM boards b
+      WHERE b.id NOT IN (SELECT board_id FROM board_views WHERE user_id = ?)
+    `, [userId]);
+    const [boardRecent] = await pool.query(
+      `SELECT b.id, b.title, b.author_name, b.created_at,
+              (SELECT COUNT(*) FROM board_comments WHERE board_id = b.id) AS comment_count
+       FROM boards b ORDER BY b.created_at DESC LIMIT 5`
+    );
+
+    // 청구목록 최근5개
+    let recentApprovalQuery = isFinance
+      ? `SELECT id, dept_name, document_type, request_date, total_amount, status FROM approval_requests ORDER BY request_date DESC, id DESC LIMIT 5`
+      : `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status
+         FROM approval_requests ar
+         WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)
+         ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`;
+    const [approvalRecent] = await pool.query(recentApprovalQuery, isFinance ? [] : [userId]);
+
+    // 내결재목록 최근5개
+    const [myApprovalRecent] = await pool.query(
+      `SELECT id, dept_name, document_type, request_date, total_amount, status
+       FROM approval_requests WHERE current_approver_user_id = ? AND status = '결재진행중'
+       ORDER BY request_date DESC LIMIT 5`,
+      [userId]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        approvalCount,
+        myApprovalCount,
+        unreadNoticeCount,
+        unreadBoardCount,
+        noticeRecent,
+        boardRecent,
+        approvalRecent,
+        myApprovalRecent,
+      }
+    });
+  } catch (err) {
+    console.error("❌ 포탈 요약 조회 실패:", err);
+    res.status(500).json({ success: false, message: "포탈 요약 조회 실패" });
+  }
+});
 
 /* ------------------------------------------------
    ✅ 서버 실행
