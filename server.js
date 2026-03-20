@@ -2666,13 +2666,30 @@ app.get("/api/portal/summary", async (req, res) => {
   try {
     const userId = req.session.user.userId;
     const isFinance = req.session.user?.deptName === "재정부";
+    const { startDate, endDate } = req.query;
+
+    // 날짜 조건 생성 (조회조건이 있으면 반영, 없으면 기본 1개월 전부터 현재까지)
+    let dateWhere = "";
+    const dateParams = [];
+    
+    if (startDate) {
+      dateWhere += " AND ar.request_date >= ?";
+      dateParams.push(startDate);
+    } else {
+      dateWhere += " AND ar.request_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
+    }
+    
+    if (endDate) {
+      dateWhere += " AND ar.request_date <= ?";
+      dateParams.push(endDate);
+    }
 
     // 청구목록 카운트 (본인 또는 재정부 전체)
-    let approvalWhere = isFinance ? "" : "WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)";
+    let approvalWhere = isFinance ? "WHERE 1=1" : "WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)";
     const approvalParams = isFinance ? [] : [userId];
     const [[{ approvalCount }]] = await pool.query(
-      `SELECT COUNT(*) AS approvalCount FROM approval_requests ar ${approvalWhere}`,
-      approvalParams
+      `SELECT COUNT(*) AS approvalCount FROM approval_requests ar ${approvalWhere}${dateWhere}`,
+      [...approvalParams, ...dateParams]
     );
 
     // 내결재목록 카운트 (current_approver_user_id = 본인)
@@ -2703,14 +2720,14 @@ app.get("/api/portal/summary", async (req, res) => {
        FROM boards b ORDER BY b.created_at DESC LIMIT 5`
     );
 
-    // 청구목록 최근5개
+    // 청구목록 최근5개 (날짜 필터 적용)
     let recentApprovalQuery = isFinance
-      ? `SELECT id, dept_name, document_type, request_date, total_amount, status FROM approval_requests ORDER BY request_date DESC, id DESC LIMIT 5`
+      ? `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status FROM approval_requests ar ${approvalWhere}${dateWhere} ORDER BY request_date DESC, ar.id DESC LIMIT 5`
       : `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status
          FROM approval_requests ar
-         WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)
+         ${approvalWhere}${dateWhere}
          ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`;
-    const [approvalRecent] = await pool.query(recentApprovalQuery, isFinance ? [] : [userId]);
+    const [approvalRecent] = await pool.query(recentApprovalQuery, [...approvalParams, ...dateParams]);
 
     // 내결재목록 최근5개
     const [myApprovalRecent] = await pool.query(
