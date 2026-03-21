@@ -111,7 +111,7 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + "-" + file.originalname);
   },
 });
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: { fieldSize: 50 * 1024 * 1024 } // 50MB (base64 문자열 허용 위함)
 });
@@ -432,26 +432,34 @@ app.post("/api/approvalList", async (req, res) => {
       where += " AND ar.request_date <= ?";
       params.push(endDate);
     }
-    // ✅ 진행상태
-    if (status) {
-      if (status != "전체") {
-        where += " AND ar.status = ?";
-        params.push(status);
-      }
-    }
-
-    // ✅ 현재 결재자 (보안 강화)
+    // ✅ 진행상태 및 권한별 필터링 (홈 화면 summary 로직과 동기화)
     const isFinance = req.session.user?.deptName === "재정부";
-    if (status === "결재진행중") {
-      if (approverUserId) {
-        where += " AND ar.current_approver_user_id = ?";
-        params.push(approverUserId);
-      } else if (!isFinance) {
-        // 일반 사용자가 결재자 ID 누락 시 본인 ID로 강제 필터링
-        where += " AND ar.current_approver_user_id = ?";
-        params.push(req.session.user?.userId);
+    const userId = req.session.user?.userId;
+
+    if (status === "결재대기") {
+      // 상세 화면 최초 진입 시 홈 화면 배지와 동일한 '결재 대기' 항목만 조회
+      if (isFinance) {
+        where += ` AND (
+          (ar.dept_name = '재정부' AND ar.status IN ('결재진행중', '결재완료'))
+          OR (ar.dept_name != '재정부' AND ar.status = '결재완료')
+        )`;
+      } else {
+        where += " AND ar.current_approver_user_id = ? AND ar.status = '결재진행중'";
+        params.push(userId);
       }
-      // 재정부 사용자가 '타부서 청구' 조회 시(approverUserId 없음) 필터 생략하여 전체 조회 허용
+    } else if (status && status !== "전체") {
+      where += " AND ar.status = ?";
+      params.push(status);
+
+      if (status === "결재진행중") {
+        if (approverUserId) {
+          where += " AND ar.current_approver_user_id = ?";
+          params.push(approverUserId);
+        } else if (!isFinance) {
+          where += " AND ar.current_approver_user_id = ?";
+          params.push(userId);
+        }
+      }
     }
 
     const [[{ count }]] = await pool.query(
@@ -2520,7 +2528,7 @@ app.get("/api/notices", async (req, res) => {
     const offset = (page - 1) * limit;
 
     const [[{ count }]] = await pool.query("SELECT COUNT(*) AS count FROM notices");
-    
+
     // 최근 1주일 필터 표시를 위해 등록일 포함
     const [rows] = await pool.query(`
       SELECT id, title, author_id, author_name, view_count, created_at
@@ -2546,7 +2554,7 @@ app.get("/api/notices", async (req, res) => {
 app.get("/api/notices/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     // 조회수 1 증가 (쿠키/세션 기반 중복 방지는 생략하고 단순 증가)
     await pool.query("UPDATE notices SET view_count = view_count + 1 WHERE id = ?", [id]);
 
@@ -2629,7 +2637,7 @@ app.put("/api/notices/:id", upload.array("files", 10), async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    
+
     const { id } = req.params;
     const { title, content, deletedFileIds } = req.body; // 삭제할 첨부파일 ID들 (JSON string)
 
@@ -2646,7 +2654,7 @@ app.put("/api/notices/:id", upload.array("files", 10), async (req, res) => {
       } catch (e) {
         idsToDelete = typeof deletedFileIds === 'string' ? deletedFileIds.split(',') : deletedFileIds;
       }
-      
+
       if (Array.isArray(idsToDelete) && idsToDelete.length > 0) {
         // 실제 파일 삭제를 원한다면 DB 조회 후 fs.unlink를 해야 함. 여기서는 DB만 지움(고아 리소스 허용 또는 추후 정리)
         await conn.query("DELETE FROM notice_files WHERE id IN (?) AND notice_id = ?", [idsToDelete, id]);
@@ -2708,69 +2716,83 @@ app.get("/api/portal/summary", async (req, res) => {
   try {
     const userId = req.session.user.userId;
     const isFinance = req.session.user?.deptName === "재정부";
+    const deptName = req.session.user?.deptName;
     const { startDate, endDate } = req.query;
 
     // 날짜 조건 생성 (조회조건이 있으면 반영, 없으면 기본 1개월 전부터 현재까지)
     let dateWhere = "";
     const dateParams = [];
-    
+
     if (startDate) {
       dateWhere += " AND ar.request_date >= ?";
       dateParams.push(startDate);
     } else {
       dateWhere += " AND ar.request_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)";
     }
-    
+
     if (endDate) {
       dateWhere += " AND ar.request_date <= ?";
       dateParams.push(endDate);
     }
 
-    // 청구목록 카운트 (본인 또는 재정부 전체)
-    let approvalWhere = isFinance ? "WHERE 1=1" : "WHERE ar.dept_name = (SELECT dept_name FROM users WHERE user_id = ?)";
-    const approvalParams = isFinance ? [] : [userId];
-    const [[{ approvalCount }]] = await pool.query(
-      `SELECT COUNT(*) AS approvalCount FROM approval_requests ar ${approvalWhere}${dateWhere}`,
-      [...approvalParams, ...dateParams]
+    // 1. 공통 부서 및 기간 정보 확보
+    const effectiveRoot = isFinance ? "교회" : deptName;
+    const [subDepts] = await pool.query(
+      `WITH RECURSIVE sub_depts AS (
+        SELECT id, dept_name, parent_dept_id FROM departments WHERE dept_name = ?
+        UNION ALL
+        SELECT d.id, d.dept_name, d.parent_dept_id FROM departments d
+        INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
+      ) SELECT dept_name FROM sub_depts`,
+      [effectiveRoot]
     );
 
-    // 내결재목록 (결재 대기 목록) 처리
-    let myApprovalCountQuery = "";
-    let myApprovalRecentQuery = "";
-    let myApprovalParams = [userId];
+    const deptList = subDepts.map((d) => d.dept_name);
+    const deptPlaceholder = deptList.map(() => "?").join(",");
+
+    // 2. 전체 청구 건수 (날짜 필터 + 조직 기반)
+    const [[{ approvalCount }]] = await pool.query(
+      `SELECT COUNT(*) AS approvalCount FROM approval_requests ar 
+       WHERE ar.dept_name IN (${deptPlaceholder}) ${dateWhere}`,
+      [...deptList, ...dateParams]
+    );
+
+    // 3. 내 결재 대기 건수 및 최근 목록 (상세 페이지의 필터링 로직과 동기화)
+    let myApprovalWhere = "";
+    let myApprovalParams = [];
 
     if (isFinance) {
-      // 재정부 사용자는 본인 결재건 + 타부서의 결재완료(재정부 이관 대기) 건도 포함
-      myApprovalCountQuery = `
-        SELECT COUNT(*) AS myApprovalCount 
-        FROM approval_requests 
-        WHERE (current_approver_user_id = ? AND status = '결재진행중')
-           OR (dept_name != '재정부' AND status = '결재완료')
+      // 재정부: (재정부 건 중 결재진행중/결재완료) + (타부서 건 중 결재완료)
+      myApprovalWhere = `
+        WHERE ar.dept_name IN (${deptPlaceholder})
+        AND (
+          (ar.dept_name = '재정부' AND ar.status IN ('결재진행중', '결재완료'))
+          OR (ar.dept_name != '재정부' AND ar.status = '결재완료')
+        )
       `;
-      myApprovalRecentQuery = `
-        SELECT id, dept_name, document_type, request_date, total_amount, status
-        FROM approval_requests
-        WHERE (current_approver_user_id = ? AND status = '결재진행중')
-           OR (dept_name != '재정부' AND status = '결재완료')
-        ORDER BY request_date DESC, id DESC LIMIT 5
-      `;
+      myApprovalParams = [...deptList];
     } else {
-      // 일반 사용자는 본인 결재 대기건만
-      myApprovalCountQuery = `
-        SELECT COUNT(*) AS myApprovalCount 
-        FROM approval_requests 
-        WHERE current_approver_user_id = ? AND status = '결재진행중'
+      // 일반: 소속 부서군 내 본인이 현재 결재자인 건
+      myApprovalWhere = `
+        WHERE ar.dept_name IN (${deptPlaceholder})
+        AND ar.current_approver_user_id = ? 
+        AND ar.status = '결재진행중'
       `;
-      myApprovalRecentQuery = `
-        SELECT id, dept_name, document_type, request_date, total_amount, status
-        FROM approval_requests 
-        WHERE current_approver_user_id = ? AND status = '결재진행중'
-        ORDER BY request_date DESC LIMIT 5
-      `;
+      myApprovalParams = [...deptList, userId];
     }
 
-    const [[{ myApprovalCount }]] = await pool.query(myApprovalCountQuery, myApprovalParams);
-    const [myApprovalRecent] = await pool.query(myApprovalRecentQuery, myApprovalParams);
+    const [[{ myApprovalCount }]] = await pool.query(
+      `SELECT COUNT(*) AS myApprovalCount FROM approval_requests ar ${myApprovalWhere} ${dateWhere}`,
+      [...myApprovalParams, ...dateParams]
+    );
+
+    const [myApprovalRecent] = await pool.query(
+      `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status, ar.author, ar.aliasName
+       FROM approval_requests ar 
+       ${myApprovalWhere} ${dateWhere}
+       ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`,
+      [...myApprovalParams, ...dateParams]
+    );
 
     // 읽지 않은 공지사항 카운트
     const [[{ unreadNoticeCount }]] = await pool.query(`
@@ -2794,14 +2816,14 @@ app.get("/api/portal/summary", async (req, res) => {
        FROM boards b ORDER BY b.created_at DESC LIMIT 5`
     );
 
-    // 청구목록 최근5개 (날짜 필터 적용)
-    let recentApprovalQuery = isFinance
-      ? `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status FROM approval_requests ar ${approvalWhere}${dateWhere} ORDER BY request_date DESC, ar.id DESC LIMIT 5`
-      : `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status
-         FROM approval_requests ar
-         ${approvalWhere}${dateWhere}
-         ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`;
-    const [approvalRecent] = await pool.query(recentApprovalQuery, [...approvalParams, ...dateParams]);
+    // 청구목록 최근5개 (날짜 필터 + 조직 기반)
+    const [approvalRecent] = await pool.query(
+      `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, ar.status 
+       FROM approval_requests ar 
+       WHERE ar.dept_name IN (${deptPlaceholder}) ${dateWhere}
+       ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`,
+      [...deptList, ...dateParams]
+    );
 
     res.json({
       success: true,
