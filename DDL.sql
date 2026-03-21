@@ -80,3 +80,15 @@ CREATE TABLE IF NOT EXISTS notice_views (
   PRIMARY KEY (user_id, notice_id),
   FOREIGN KEY (notice_id) REFERENCES notices(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+-- ───────────────────────────────────────────────────────────
+-- 💡 User Favorites (사용자 즐겨찾기 메뉴)
+-- ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS user_favorites (
+  user_id VARCHAR(50) NOT NULL,
+  menu_name VARCHAR(100) NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, menu_name)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -1643,6 +1643,48 @@ app.get("/api/access/:roleId", async (req, res) => {
   }
 });
 
+// ───────────────────────────────────────────────────────────
+// ✅ 사용자 즐겨찾기 메뉴 관리
+// ───────────────────────────────────────────────────────────
+app.get("/api/user/favorites", async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ success: false });
+  try {
+    const [rows] = await pool.query(
+      "SELECT menu_name FROM user_favorites WHERE user_id = ? ORDER BY created_at ASC",
+      [req.session.user.userId]
+    );
+    res.json({ success: true, favorites: rows.map(r => r.menu_name) });
+  } catch (err) {
+    console.error("즐겨찾기 조회 실패:", err);
+    res.status(500).json({ success: false });
+  }
+});
+
+app.post("/api/user/favorites", async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ success: false });
+  const { menus } = req.body; // array of menu names
+  const userId = req.session.user.userId;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    // 기존 삭제 후 재등록
+    await conn.query("DELETE FROM user_favorites WHERE user_id = ?", [userId]);
+    if (menus && menus.length > 0) {
+      const values = menus.map(m => [userId, m]);
+      await conn.query("INSERT INTO user_favorites (user_id, menu_name) VALUES ?", [values]);
+    }
+    await conn.commit();
+    res.json({ success: true });
+  } catch (err) {
+    await conn.rollback();
+    console.error("즐겨찾기 저장 실패:", err);
+    res.status(500).json({ success: false });
+  } finally {
+    conn.release();
+  }
+});
+
 // ✅ 접근 권한 추가/삭제 (토글)
 app.post("/api/access", async (req, res) => {
   const { roleId, menuName, accessType, enabled } = req.body;
