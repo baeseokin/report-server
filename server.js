@@ -2692,11 +2692,43 @@ app.get("/api/portal/summary", async (req, res) => {
       [...approvalParams, ...dateParams]
     );
 
-    // 내결재목록 카운트 (current_approver_user_id = 본인)
-    const [[{ myApprovalCount }]] = await pool.query(
-      `SELECT COUNT(*) AS myApprovalCount FROM approval_requests WHERE current_approver_user_id = ? AND status = '결재진행중'`,
-      [userId]
-    );
+    // 내결재목록 (결재 대기 목록) 처리
+    let myApprovalCountQuery = "";
+    let myApprovalRecentQuery = "";
+    let myApprovalParams = [userId];
+
+    if (isFinance) {
+      // 재정부 사용자는 본인 결재건 + 타부서의 결재완료(재정부 이관 대기) 건도 포함
+      myApprovalCountQuery = `
+        SELECT COUNT(*) AS myApprovalCount 
+        FROM approval_requests 
+        WHERE (current_approver_user_id = ? AND status = '결재진행중')
+           OR (dept_name != '재정부' AND status = '결재완료')
+      `;
+      myApprovalRecentQuery = `
+        SELECT id, dept_name, document_type, request_date, total_amount, status
+        FROM approval_requests
+        WHERE (current_approver_user_id = ? AND status = '결재진행중')
+           OR (dept_name != '재정부' AND status = '결재완료')
+        ORDER BY request_date DESC, id DESC LIMIT 5
+      `;
+    } else {
+      // 일반 사용자는 본인 결재 대기건만
+      myApprovalCountQuery = `
+        SELECT COUNT(*) AS myApprovalCount 
+        FROM approval_requests 
+        WHERE current_approver_user_id = ? AND status = '결재진행중'
+      `;
+      myApprovalRecentQuery = `
+        SELECT id, dept_name, document_type, request_date, total_amount, status
+        FROM approval_requests 
+        WHERE current_approver_user_id = ? AND status = '결재진행중'
+        ORDER BY request_date DESC LIMIT 5
+      `;
+    }
+
+    const [[{ myApprovalCount }]] = await pool.query(myApprovalCountQuery, myApprovalParams);
+    const [myApprovalRecent] = await pool.query(myApprovalRecentQuery, myApprovalParams);
 
     // 읽지 않은 공지사항 카운트
     const [[{ unreadNoticeCount }]] = await pool.query(`
@@ -2728,14 +2760,6 @@ app.get("/api/portal/summary", async (req, res) => {
          ${approvalWhere}${dateWhere}
          ORDER BY ar.request_date DESC, ar.id DESC LIMIT 5`;
     const [approvalRecent] = await pool.query(recentApprovalQuery, [...approvalParams, ...dateParams]);
-
-    // 내결재목록 최근5개
-    const [myApprovalRecent] = await pool.query(
-      `SELECT id, dept_name, document_type, request_date, total_amount, status
-       FROM approval_requests WHERE current_approver_user_id = ? AND status = '결재진행중'
-       ORDER BY request_date DESC LIMIT 5`,
-      [userId]
-    );
 
     res.json({
       success: true,
