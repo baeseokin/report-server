@@ -10,8 +10,7 @@ const bcrypt = require("bcrypt");
 const os = require("os");
 require("dotenv").config();   // ✅ .env 불러오기 (가장 먼저)
 
-const emailRoutes = require("./routes/email.routes");
-const { sendApprovalDecisionMail } = require("./services/sendApprovalDecisionMail");
+const { sendApprovalAlimTalk } = require("./services/sendApprovalAlimTalk");
 
 // ───────────────────────────────────────────────────────────
 // ✅ NODE_ENV 자동 감지 (로컬=development, Pod/컨테이너=production)
@@ -63,7 +62,7 @@ app.use(bodyParser.json());
 if (ENV === "production") {
   app.set("trust proxy", 1);
 }
-app.use("/api/email", emailRoutes);
+// app.use("/api/email", emailRoutes);
 
 app.use(
   session({
@@ -305,39 +304,31 @@ app.post("/api/approval", async (req, res) => {
     if (initialStatus === "결재진행중") {
       setImmediate(async () => {
         try {
-          // 다음 결재자 이메일 조회
+          // 다음 결재자 정보 조회 (이메일, 휴대폰)
           const [[nextUser]] = await pool.query(
-            `SELECT user_name, email FROM users WHERE user_id = ? LIMIT 1`,
+            `SELECT user_name, email, phone FROM users WHERE user_id = ? LIMIT 1`,
             [nextApprover?.approver_user_id]
           );
-          const to = nextUser?.email;
+          const toEmail = nextUser?.email;
+          const toPhone = nextUser?.phone;
           console.log("/api/approval - nextUser:", nextUser);
-          console.log("/api/approval - to:", to);
+          console.log("/api/approval - toEmail:", toEmail, "toPhone:", toPhone);
 
-          if (!to) {
-            console.warn(`📭 approval #${requestId}: no next approver email`);
-            return;
+          // ✅ 알림톡 발송
+          if (toPhone) {
+            await sendApprovalAlimTalk({
+              to: toPhone,
+              templateCode: process.env.SENDON_TEMPLATE_ID,
+              deptName,
+              author,
+              requestDate: date,
+              totalAmount,
+              comment,
+              urlPath: "approvalStatus"
+            });
           }
-
-          const title = `결재 진행 요청 - ${documentType} (요청자: ${author})`;
-          const bodyText =
-            `다음 결재 단계로 이관되었습니다.\n\n` +
-            `부서: ${deptName}\n` +
-            `작성자: ${author}\n` +
-            `요청일자: ${date}\n` +
-            `청구총액: ₩${Number(totalAmount).toLocaleString("ko-KR")}\n` +
-            (comment ? `결재 코멘트: ${comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL + "/approvalStatus";
-          await sendApprovalDecisionMail({
-            to,
-            title,
-            bodyText,
-            requestId,
-            ctaUrl
-          });
-
         } catch (e) {
-          console.error("❌ approval mail send error:", e.message);
+          console.error("❌ approval notification send error:", e.message);
         }
       });
     }
@@ -766,80 +757,54 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
       try {
         if (mailPlan.type === "handoff") {
-          // 다음 결재자/신청자 이메일 조회
+          // 다음 결재자 정보 조회 (이메일, 휴대폰)
           const [[nextUser]] = await pool.query(
-            `SELECT user_name, email FROM users WHERE user_id=? LIMIT 1`,
+            `SELECT user_name, email, phone FROM users WHERE user_id=? LIMIT 1`,
             [mailPlan.approverUserId]
           );
-          // const [[applicant]] = await pool.query(
-          //   `SELECT email FROM users WHERE user_name=? LIMIT 1`,
-          //   [mailPlan.applicantName]
-          // );
+          const toEmail = nextUser?.email;
+          const toPhone = nextUser?.phone;
 
-          const to = nextUser?.email;
-          //const cc = applicant?.email || process.env.MAIL_CC;
-
-          if (!to) {
-            console.warn(`📭 approval #${mailPlan.requestId}: no next approver email`);
+          if (!toPhone) {
+            console.warn(`📭 approval #${mailPlan.requestId}: no next approver contact info`);
             return;
           }
 
-          const title = `결재 진행 요청 - ${mailPlan.docType} (요청자: ${mailPlan.author})`;
-          const bodyText =
-            `결재건이 이관되었습니다.\n\n` +
-            `부서: ${mailPlan.deptName}\n` +
-            `작성자: ${mailPlan.author}\n` +
-            `요청일자: ${mailPlan.requestDate}\n` +
-            `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
-            `이전 결재자: ${mailPlan.approvedBy}\n` +
-            (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL + "/approvalStatus";
-
-          await sendApprovalDecisionMail({
-            to,
-            //cc,
-            title,
-            bodyText,
-            requestId: mailPlan.requestId,
-            ctaUrl
-          });
-
-          console.log(`📧 [handoff] #${mailPlan.requestId} → ${to}`);
+          if (toPhone) {
+            await sendApprovalAlimTalk({
+              to: toPhone,
+              templateCode: process.env.SENDON_TEMPLATE_ID,
+              deptName: mailPlan.deptName,
+              author: mailPlan.author,
+              requestDate: mailPlan.requestDate,
+              totalAmount: mailPlan.amount,
+              comment: mailPlan.comment,
+              urlPath: "approvalStatus"
+            });
+            console.log(`📱 [handoff alimtalk] #${mailPlan.requestId} → ${toPhone}`);
+          }
         } else if (mailPlan.type === "completed") {
-          // 신청자 이메일 조회
+          // 신청자 정보 조회 (이메일, 휴대폰)
           const [[applicant]] = await pool.query(
-            `SELECT email FROM users WHERE user_name=? LIMIT 1`,
+            `SELECT email, phone FROM users WHERE user_name=? LIMIT 1`,
             [mailPlan.author]
           );
-          const to = applicant?.email;
+          const toPhone = applicant?.phone;
           //const cc = process.env.MAIL_CC;
 
-          if (!to) {
-            console.warn(`📭 approval #${mailPlan.requestId}: no applicant email`);
-            return;
+          if (toPhone) {
+            await sendApprovalAlimTalk({
+              to: toPhone,
+              templateCode: process.env.SENDON_TEMPLATE_ID,
+              deptName: mailPlan.deptName,
+              author: mailPlan.author,
+              requestDate: mailPlan.requestDate,
+              totalAmount: mailPlan.amount,
+              comment: mailPlan.comment,
+              urlPath: "approvalList"
+            });
+            console.log(`📱 [completed alimtalk] #${mailPlan.requestId} → ${toPhone}`);
           }
-
-          const title = `최종 승인 완료 - ${mailPlan.docType} (요청일자: ${mailPlan.requestDate})`;
-          const bodyText =
-            `결재요청이 최종 승인되었습니다.\n\n` +
-            `부서: ${mailPlan.deptName}\n` +
-            `작성자: ${mailPlan.author}\n` +
-            `요청일자: ${mailPlan.requestDate}\n` +
-            `청구총액: ₩${Number(mailPlan.amount).toLocaleString("ko-KR")}\n` +
-            `최종 승인자: ${mailPlan.approvedBy}\n` +
-            (mailPlan.comment ? `결재 코멘트: ${mailPlan.comment}\n` : "");
-          const ctaUrl = process.env.APP_BASE_URL + "/approvalList";
-
-          await sendApprovalDecisionMail({
-            to,
-            //cc,
-            title,
-            bodyText,
-            requestId: mailPlan.requestId,
-            ctaUrl
-          });
-
-          console.log(`📧 [completed] #${mailPlan.requestId} → ${to}`);
         }
       } catch (mailErr) {
         console.error("❌ approval approve mail error:", mailErr);
@@ -920,36 +885,26 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
     setImmediate(async () => {
       try {
 
-        // 신청자 이메일 조회
+        // 신청자 정보 조회 (이메일, 휴대폰)
         const [[applicant]] = await pool.query(
-          `SELECT email FROM users WHERE user_name=? LIMIT 1`,
+          `SELECT email, phone FROM users WHERE user_name=? LIMIT 1`,
           [author]
         );
-        const to = applicant?.email;
+        const toPhone = applicant?.phone;
 
-        if (!to) {
-          console.warn(`📭 approval #${requestId}: no applicant email`);
-          return;
+        if (toPhone) {
+          await sendApprovalAlimTalk({
+            to: toPhone,
+            templateCode: process.env.SENDON_TEMPLATE_ID,
+            deptName,
+            author,
+            requestDate: request_date,
+            totalAmount: total_amount,
+            comment: `반려 코멘트: ${comment || ""}`,
+            urlPath: "approvalList"
+          });
+          console.log(`📱 [reject alimtalk] #${requestId} → ${toPhone}`);
         }
-
-        const title = `결재 요청 반려 - ${document_type} (요청일자: ${request_date})`;
-        const bodyText =
-          `결재요청이 최종 반려되었습니다.\n\n` +
-          `부서: ${dept_name}\n` +
-          `작성자: ${author}\n` +
-          `요청일자: ${request_date}\n` +
-          `청구총액: ₩${Number(total_amount).toLocaleString("ko-KR")}\n` +
-          `최종 승인자: ${req.session.user.userName}\n` +
-          (comment ? `결재 코멘트: ${comment}\n` : "");
-
-        await sendApprovalDecisionMail({
-          to,
-          title,
-          bodyText,
-          requestId: requestId,
-        });
-
-        console.log(`📧 [completed] #${requestId} → ${to}`);
 
       } catch (mailErr) {
         console.error("❌ approval approve mail error:", mailErr);
