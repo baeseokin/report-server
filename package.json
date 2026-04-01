@@ -12,6 +12,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@alipeople/sendon-sdk-typescript": "^1.0.4",
     "bcrypt": "^6.0.0",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
@@ -20,7 +21,6 @@
     "express-session": "^1.18.2",
     "multer": "^2.0.2",
     "mysql2": "^3.14.3",
-    "nodemailer": "^7.0.9",
     "pinia": "^3.0.3",
     "sanitize-html": "^2.17.2"
   }
