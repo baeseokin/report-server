@@ -895,7 +895,7 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
             to: toPhone,
             status: "반려",
             templateCode: process.env.SENDON_TEMPLATE_ID,  //TODO 템플릿 변경
-            deptName,
+            deptName: dept_name,
             author,
             requestDate: request_date,
             totalAmount: total_amount,
