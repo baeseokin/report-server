@@ -5,7 +5,7 @@ const { sendAlimTalk } = require("./kakaoService");
  * 
  * @param {Object} opts
  * @param {string|string[]}   opts.to            수신 전화번호
- * @param {string}            opts.statusMessage 진행상태메세지 (템플릿 상단)
+ * @param {string}            opts.status        진행상태
  * @param {string}            opts.deptName      부서명
  * @param {string}            opts.author        작성자
  * @param {string}            opts.requestDate   요청일자
@@ -23,7 +23,8 @@ async function sendApprovalAlimTalk(opts) {
     totalAmount,
     comment,
     templateCode,
-    urlPath
+    urlPath,
+    status
   } = opts || {};
 
   // 필수값 검증
@@ -44,9 +45,10 @@ async function sendApprovalAlimTalk(opts) {
           "#{부서명}": deptName || "-",
           "#{작성자}": author || "-",
           "#{요청일자}": requestDate || "-",
-          "#{청구총액}": `${formattedAmount} 원`,
-          "#{코멘트 내용}": comment || "-",
-          "#{URL}": urlPath || ""
+          "#{청구총액}": `${formattedAmount}`,
+          "#{코멘트 내용}": comment || "없음",
+          "#{URL}": urlPath || "",
+          ...(status && { "#{진행상태}": status })
         }
       }
     ]
