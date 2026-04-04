@@ -304,15 +304,14 @@ app.post("/api/approval", async (req, res) => {
     if (initialStatus === "결재진행중") {
       setImmediate(async () => {
         try {
-          // 다음 결재자 정보 조회 (이메일, 휴대폰)
+          // 다음 결재자 정보 조회 (휴대폰)
           const [[nextUser]] = await pool.query(
-            `SELECT user_name, email, phone FROM users WHERE user_id = ? LIMIT 1`,
+            `SELECT user_name, phone FROM users WHERE user_id = ? LIMIT 1`,
             [nextApprover?.approver_user_id]
           );
-          const toEmail = nextUser?.email;
           const toPhone = nextUser?.phone;
           console.log("/api/approval - nextUser:", nextUser);
-          console.log("/api/approval - toEmail:", toEmail, "toPhone:", toPhone);
+          console.log("/api/approval - toPhone:", toPhone);
 
           // ✅ 알림톡 발송
           if (toPhone) {
@@ -750,19 +749,18 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
     res.json({ success: true, message: "결재가 완료되었습니다." });
 
     // ───────────────────────────────────────────────────────────
-    // ✅ 커밋 후 비동기 메일 발송
+    // ✅ 커밋 후 비동기 알림톡 발송
     // ───────────────────────────────────────────────────────────
     setImmediate(async () => {
       if (!mailPlan) return;
 
       try {
         if (mailPlan.type === "handoff") {
-          // 다음 결재자 정보 조회 (이메일, 휴대폰)
+          // 다음 결재자 정보 조회 (휴대폰)
           const [[nextUser]] = await pool.query(
-            `SELECT user_name, email, phone FROM users WHERE user_id=? LIMIT 1`,
+            `SELECT user_name, phone FROM users WHERE user_id=? LIMIT 1`,
             [mailPlan.approverUserId]
           );
-          const toEmail = nextUser?.email;
           const toPhone = nextUser?.phone;
 
           if (!toPhone) {
@@ -784,9 +782,9 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             console.log(`📱 [handoff alimtalk] #${mailPlan.requestId} → ${toPhone}`);
           }
         } else if (mailPlan.type === "completed") {
-          // 신청자 정보 조회 (이메일, 휴대폰)
+          // 신청자 정보 조회 (휴대폰)
           const [[applicant]] = await pool.query(
-            `SELECT email, phone FROM users WHERE user_name=? LIMIT 1`,
+            `SELECT phone FROM users WHERE user_name=? LIMIT 1`,
             [mailPlan.author]
           );
           const toPhone = applicant?.phone;
@@ -806,8 +804,8 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             console.log(`📱 [completed alimtalk] #${mailPlan.requestId} → ${toPhone}`);
           }
         }
-      } catch (mailErr) {
-        console.error("❌ approval approve mail error:", mailErr);
+      } catch (alimtalkErr) {
+        console.error("❌ approval approve alimtalk error:", alimtalkErr);
       }
     });
 
@@ -880,14 +878,14 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
 
 
     // ───────────────────────────────────────────────────────────
-    // ✅ 커밋 후 비동기 메일 발송
+    // ✅ 커밋 후 비동기 알림톡 발송
     // ───────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
 
-        // 신청자 정보 조회 (이메일, 휴대폰)
+        // 신청자 정보 조회 (휴대폰)
         const [[applicant]] = await pool.query(
-          `SELECT email, phone FROM users WHERE user_name=? LIMIT 1`,
+          `SELECT phone FROM users WHERE user_name=? LIMIT 1`,
           [author]
         );
         const toPhone = applicant?.phone;
@@ -906,8 +904,8 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
           console.log(`📱 [reject alimtalk] #${requestId} → ${toPhone}`);
         }
 
-      } catch (mailErr) {
-        console.error("❌ approval approve mail error:", mailErr);
+      } catch (alimtalkErr) {
+        console.error("❌ approval reject alimtalk error:", alimtalkErr);
       }
     });
 
