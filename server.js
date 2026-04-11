@@ -793,13 +793,14 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           if (toPhone) {
             await sendApprovalAlimTalk({
               to: toPhone,
-              templateCode: process.env.SENDON_TEMPLATE_ID, //TODO 결재완료 템플릿으로 발송
+              templateCode: process.env.SENDON_TEMPLATE_STATUS_ID,
               deptName: mailPlan.deptName,
               author: mailPlan.author,
               requestDate: mailPlan.requestDate,
               totalAmount: mailPlan.amount,
               comment: mailPlan.comment,
-              urlPath: "approvalList"
+              urlPath: "approvalList",
+              status: "결재완료"
             });
             console.log(`📱 [completed alimtalk] #${mailPlan.requestId} → ${toPhone}`);
           }
@@ -894,13 +895,14 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
           await sendApprovalAlimTalk({
             to: toPhone,
             status: "반려",
-            templateCode: process.env.SENDON_TEMPLATE_ID,  //TODO 템플릿 변경
+            templateCode: process.env.SENDON_TEMPLATE_STATUS_ID,
             deptName: dept_name,
             author,
             requestDate: request_date,
             totalAmount: total_amount,
             comment: `${comment || "없음"}`,
-            urlPath: "approvalList"
+            urlPath: "approvalList",
+            status: "반려"
           });
           console.log(`📱 [reject alimtalk] #${requestId} → ${toPhone}`);
         }
