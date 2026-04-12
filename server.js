@@ -112,7 +112,10 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fieldSize: 50 * 1024 * 1024 } // 50MB (base64 문자열 허용 위함)
+  limits: { 
+    fieldSize: 50 * 1024 * 1024, // 50MB
+    fileSize: 50 * 1024 * 1024  // 50MB
+  }
 });
 
 // ✅ 서명 파일 저장소 (캔버스 → PNG 업로드용)
