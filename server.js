@@ -95,6 +95,21 @@ const pool = mysql.createPool({
 console.log(`🌍 NODE_ENV: ${process.env.NODE_ENV}  (ENV helper: ${ENV})`);
 console.log(`📦 DB → ${envPick("DB_HOST", "localhost")}:${envNumber("DB_PORT", 3306)} / ${envPick("DB_NAME", "test")}`);
 
+// ✅ DB 스키마 자동 보정 (payee 컬럼 누락 시 추가)
+(async () => {
+  try {
+    const [rows] = await pool.query("DESCRIBE approval_requests");
+    const hasPayee = rows.some(r => r.Field === 'payee');
+    if (!hasPayee) {
+      console.log("🛠 [Migration] approval_requests 테이블에 payee 컬럼이 없어 추가합니다.");
+      await pool.query("ALTER TABLE approval_requests ADD COLUMN payee VARCHAR(100) AFTER author");
+      console.log("✅ [Migration] payee 컬럼 추가 완료");
+    }
+  } catch (err) {
+    console.error("❌ [Migration] 스키마 확인 중 오류:", err.message);
+  }
+})();
+
 
 // 업로드 폴더 생성
 const uploadDir = path.join(__dirname, "uploads");
@@ -112,7 +127,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { 
+  limits: {
     fieldSize: 50 * 1024 * 1024, // 50MB
     fileSize: 50 * 1024 * 1024  // 50MB
   }
@@ -197,6 +212,9 @@ app.post("/api/approval", async (req, res) => {
 
     const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
       req.body;
+    // 영수인(payee)이 없으면 작성자(author)로 기본값 설정
+    const payee = (req.body.payee && req.body.payee.trim() !== "") ? req.body.payee.trim() : author;
+
     // ✅ 클라이언트가 선택한 부서명 사용 (재정부 등이 다른 부서 선택 시). body 문자열이 있으면 무조건 사용, 없을 때만 세션
     const bodyDeptName = req.body.deptName ?? req.body.dept_name;
     const deptName =
@@ -204,6 +222,7 @@ app.post("/api/approval", async (req, res) => {
         ? bodyDeptName.trim()
         : req.session?.user?.deptName ?? null;
     console.log("POST /api/approval body.deptName:", req.body.deptName, "body.dept_name:", req.body.dept_name, "→ deptName:", deptName);
+    console.log("POST /api/approval payee:", payee, "author:", author);
     if (!deptName) {
       await conn.rollback();
       conn.release();
@@ -239,9 +258,9 @@ app.post("/api/approval", async (req, res) => {
 
       await conn.query(
         `UPDATE approval_requests 
-         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')
+         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?
          WHERE id = ?`,
-        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, requestId]
+        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, payee, requestId]
       );
 
       // 기존 항목 삭제 후 재삽입 (단순하게 처리)
@@ -249,9 +268,9 @@ app.post("/api/approval", async (req, res) => {
     } else {
       const [result] = await conn.query(
         `INSERT INTO approval_requests 
-         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang]
+         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang, payee) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang, payee]
       );
       requestId = result.insertId;
     }
@@ -531,15 +550,6 @@ app.post("/api/approvalList", async (req, res) => {
       where += " AND ar.status = ?";
       params.push(status);
 
-      if (status === "결재진행중") {
-        if (approverUserId) {
-          where += " AND ar.current_approver_user_id = ?";
-          params.push(approverUserId);
-        } else if (!isFinance) {
-          where += " AND ar.current_approver_user_id = ?";
-          params.push(userId);
-        }
-      }
     }
 
     const [[{ count }]] = await pool.query(
@@ -554,7 +564,7 @@ app.post("/api/approvalList", async (req, res) => {
 
     const [rows] = await pool.query(
       `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, 
-              ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
+              ar.author, ar.payee, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
               ar.category_gwan as selectedGwan, ar.category_hang as selectedHang,
               cg.category_name as gwanName, ch.category_name as hangName,
               (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as historyCount
@@ -651,6 +661,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       document_type: request.document_type,
       dept_name: request.dept_name,
       author: request.author,
+      payee: request.payee,
       request_date: request.request_date,
       total_amount: request.total_amount,
       comment: request.comment,
