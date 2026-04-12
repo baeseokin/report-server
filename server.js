@@ -364,6 +364,71 @@ app.post("/api/approval", async (req, res) => {
 });
 
 
+/* ------------------------------------------------
+   ✅ 결재 요청 삭제 API
+------------------------------------------------ */
+app.delete("/api/approval/:id", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const { id } = req.params;
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    // 1. 권한 및 상태 확인
+    const [existing] = await conn.query(
+      "SELECT author, (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as h_count FROM approval_requests ar WHERE ar.id = ?",
+      [id]
+    );
+
+    if (existing.length === 0) {
+      throw new Error("삭제할 요청을 찾을 수 없습니다.");
+    }
+
+    const { author, h_count } = existing[0];
+    const loginUser = req.session.user;
+
+    // 기안자 본인 확인
+    if (author !== loginUser.userName) {
+      throw new Error("삭제 권한이 없습니다.");
+    }
+
+    // 결재 진행 여부 확인 (최초 등록 시 history 1개가 이미 존재)
+    if (h_count > 1) {
+      throw new Error("이미 결재가 진행되어 삭제할 수 없습니다.");
+    }
+
+    // 2. 관련 파일 삭제 (물리 파일 + DB)
+    const [files] = await conn.query("SELECT file_path FROM approval_files WHERE request_id = ?", [id]);
+    for (const file of files) {
+      const absPath = path.join(uploadDir, file.file_path);
+      if (fs.existsSync(absPath)) {
+        fs.unlinkSync(absPath);
+      }
+    }
+    await conn.query("DELETE FROM approval_files WHERE request_id = ?", [id]);
+
+    // 3. 관련 데이터 삭제
+    await conn.query("DELETE FROM approval_items WHERE request_id = ?", [id]);
+    await conn.query("DELETE FROM approval_history WHERE request_id = ?", [id]);
+    await conn.query("DELETE FROM approval_requests WHERE id = ?", [id]);
+
+    await conn.commit();
+    res.json({ success: true, message: "성공적으로 삭제되었습니다." });
+
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ Delete Approval Error:", err.message);
+    res.status(500).json({ success: false, message: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
+
 // ✅ 결재 히스토리 저장 API
 app.post("/api/approval/history", upload.single("signature"), async (req, res) => {
   if (!req.session.user) {
