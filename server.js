@@ -192,7 +192,7 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
+    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
       req.body;
     // ✅ 클라이언트가 선택한 부서명 사용 (재정부 등이 다른 부서 선택 시). body 문자열이 있으면 무조건 사용, 없을 때만 세션
     const bodyDeptName = req.body.deptName ?? req.body.dept_name;
@@ -222,14 +222,36 @@ app.post("/api/approval", async (req, res) => {
 
 
     // approval_requests 저장 (재정부→타부서 요청 시 status = 결재완료, 그 외 결재진행중)
-    const [result] = await conn.query(
-      `INSERT INTO approval_requests 
-       (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang]
-    );
+    let requestId = id;
+    if (requestId) {
+      // ✅ 수정 모드: 기안자 확인 및 결재 진행 여부 확인
+      const [existing] = await conn.query(
+        "SELECT author, status, (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as h_count FROM approval_requests ar WHERE ar.id = ?",
+        [requestId]
+      );
+      if (existing.length === 0) throw new Error("수정할 요청을 찾을 수 없습니다.");
+      if (existing[0].author !== author) throw new Error("수정 권한이 없습니다.");
+      // h_count 가 1이라는 것은 최초 등록 이력만 있다는 뜻 (결재 진행 안 됨)
+      if (existing[0].h_count > 1) throw new Error("이미 결재가 진행되어 수정할 수 없습니다.");
 
-    const requestId = result.insertId;
+      await conn.query(
+        `UPDATE approval_requests 
+         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')
+         WHERE id = ?`,
+        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, requestId]
+      );
+
+      // 기존 항목 삭제 후 재삽입 (단순하게 처리)
+      await conn.query("DELETE FROM approval_items WHERE request_id = ?", [requestId]);
+    } else {
+      const [result] = await conn.query(
+        `INSERT INTO approval_requests 
+         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang]
+      );
+      requestId = result.insertId;
+    }
     //console.log("approval > requestId :", requestId);
 
     // ✅ 신청자의 approver_order 찾기
@@ -466,7 +488,8 @@ app.post("/api/approvalList", async (req, res) => {
       `SELECT ar.id, ar.dept_name, ar.document_type, ar.request_date, ar.total_amount, 
               ar.author, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
               ar.category_gwan as selectedGwan, ar.category_hang as selectedHang,
-              cg.category_name as gwanName, ch.category_name as hangName
+              cg.category_name as gwanName, ch.category_name as hangName,
+              (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as historyCount
        FROM approval_requests ar
        LEFT JOIN account_categories cg ON ar.category_gwan = cg.category_id
        LEFT JOIN account_categories ch ON ar.category_hang = ch.category_id
@@ -934,6 +957,19 @@ app.post("/api/approval/:id/files", upload.array("files", 10), async (req, res) 
   const { id } = req.params;
   try {
     const aliasNames = req.body.aliasNames ? JSON.parse(req.body.aliasNames) : [];
+    const isEdit = req.body.isEdit === "true";
+    const existingFileIds = req.body.existingFileIds ? JSON.parse(req.body.existingFileIds) : [];
+
+    if (isEdit) {
+      if (existingFileIds.length > 0) {
+        // 기존 파일 중 목록에서 제외된 파일들 삭제
+        await pool.query("DELETE FROM approval_files WHERE request_id = ? AND id NOT IN (?)", [id, existingFileIds]);
+      } else {
+        // 모든 기존 파일 삭제
+        await pool.query("DELETE FROM approval_files WHERE request_id = ?", [id]);
+      }
+    }
+
     for (let i = 0; i < req.files.length; i++) {
       const file = req.files[i];
       const aliasName = aliasNames[i] || file.originalname;
