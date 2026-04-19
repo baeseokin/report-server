@@ -291,7 +291,20 @@ app.post("/api/approval", async (req, res) => {
 
     let nextApprover = null;
 
-    if (applicantRows.length > 0) {
+    if (req.body.selectedChoice === "owner") {
+      // ✅ 2안(Owner 부서 위원장 직행) 선택 시
+      const [chairmanRows] = await conn.query(
+        `SELECT approver_role, approver_user_id 
+           FROM approval_line 
+          WHERE dept_name = ? AND approver_role = '위원장'
+          LIMIT 1`,
+        [deptName]
+      );
+      if (chairmanRows.length > 0) {
+        nextApprover = chairmanRows[0];
+      }
+    } else if (applicantRows.length > 0) {
+      // ✅ 1안(부서별 기본순서) 선택 및 기안자 순번 존재 시
       const applicantOrder = applicantRows[0].order_no;
       const [nextRows] = await conn.query(
         `SELECT approver_role, approver_user_id 
