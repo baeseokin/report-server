@@ -229,10 +229,11 @@ app.post("/api/approval", async (req, res) => {
       return res.status(400).json({ success: false, message: "부서 정보가 없습니다." });
     }
 
-    // ✅ 재정부 권한 사용자가 타부서 결재요청 시 진행상태를 결재완료로 바로 처리
+    // ✅ 재정부 권한 사용자가 결재요청 시(본인 부서 포함) 진행상태를 결재완료로 바로 처리 
+    // (어차피 재정부이관 단계에서 최종 검토가 이루어지기 때문)
     const userDeptName = req.session?.user?.deptName ?? "";
-    const isFinanceUserRequestingOtherDept = userDeptName === "재정부" && deptName !== "재정부";
-    const initialStatus = isFinanceUserRequestingOtherDept ? "결재완료" : "결재진행중";
+    const isFinanceUser = userDeptName === "재정부";
+    const initialStatus = isFinanceUser ? "결재완료" : "결재진행중";
 
     // ✅ 1. 부서 ID 조회 및 연도 추출 (approval_items 저장용)
     const [[deptRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
@@ -502,14 +503,21 @@ app.post("/api/approvalList", async (req, res) => {
   }
 
   try {
-    const { deptName, documentType, startDate, endDate, status, approverUserId, page = 1, pageSize = 10 } = req.body;
+    const { deptName: rawDeptName, documentType, startDate, endDate, status, approverUserId, page = 1, pageSize = 10 } = req.body;
+    const deptName = rawDeptName?.trim();
 
     let where = "WHERE 1=1";
     const params = [];
 
-    // ✅ 현재 부서 + 하위부서 조회
+    // ✅ 1. 검색 대상 부서의 ID 및 정확한 부서명 조회
+    const [[deptInfo]] = await pool.query("SELECT id, dept_name FROM departments WHERE dept_name = ?", [deptName]);
+    const requestedDeptId = deptInfo?.id;
+    const requestedDeptName = deptInfo?.dept_name || deptName;
+
+    // ✅ 2. 현재 부서 + 하위부서 재귀 조회
     let deptList = [];
-    const effectiveDeptName = deptName === "재정부" ? "교회" : deptName;
+    const effectiveDeptName = (requestedDeptName === "재정부") ? "교회" : requestedDeptName;
+    
     if (effectiveDeptName) {
       const [subDepts] = await pool.query(
         `WITH RECURSIVE sub_depts AS (
@@ -527,9 +535,30 @@ app.post("/api/approvalList", async (req, res) => {
       deptList = subDepts.map(d => d.dept_name);
     }
 
+    // ✅ 2. 전체 필터 조각들을 담을 배열
+    let whereParts = [];
+
+    // ✅ 3. 부서 및 하위부서 조건 추가
     if (deptList.length > 0) {
-      where += ` AND ar.dept_name IN (${deptList.map(() => "?").join(",")})`;
+      whereParts.push(`ar.dept_name IN (${deptList.map(() => "?").join(",")})`);
       params.push(...deptList);
+    }
+
+    // ✅ 4. 해당 부서에 할당된 모든 계정(account_category_departments 매핑 기준) 포함
+    // (관리자/재정부 등이 '전체' 검색 시 requestedDeptId가 없을 수 있음)
+    if (requestedDeptId) {
+      whereParts.push(`ar.category_hang IN (
+        SELECT ac.category_id 
+          FROM account_categories ac
+          JOIN account_category_departments acd ON ac.id = acd.account_category_id
+         WHERE acd.dept_id = ?
+      )`);
+      params.push(requestedDeptId);
+    }
+
+    // ✅ 5. 부서 관련 조건들을 OR로 묶어서 하나로 처리 (중복 방지)
+    if (whereParts.length > 0) {
+      where += ` AND (${whereParts.join(" OR ")})`;
     }
 
     if (documentType) {
@@ -541,7 +570,8 @@ app.post("/api/approvalList", async (req, res) => {
       params.push(startDate);
     }
     if (endDate) {
-      where += " AND ar.request_date <= ?";
+      // ✅ 종료일의 밤 11:59:59까지 포함하도록 처리 (DATETIME 필드 대응)
+      where += " AND ar.request_date <= CONCAT(?, ' 23:59:59')";
       params.push(endDate);
     }
     // ✅ 진행상태 및 권한별 필터링 (홈 화면 summary 로직과 동기화)
@@ -2815,9 +2845,13 @@ app.get("/api/portal/summary", async (req, res) => {
     }
 
     if (endDate) {
-      dateWhere += " AND ar.request_date <= ?";
+      dateWhere += " AND ar.request_date <= CONCAT(?, ' 23:59:59')";
       dateParams.push(endDate);
     }
+
+    // 소속 부서 ID 확보
+    const [[deptInfo]] = await pool.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
+    const requestedDeptId = deptInfo?.id;
 
     // 1. 공통 부서 및 기간 정보 확보
     const effectiveRoot = isFinance ? "교회" : deptName;
@@ -2834,11 +2868,24 @@ app.get("/api/portal/summary", async (req, res) => {
     const deptList = subDepts.map((d) => d.dept_name);
     const deptPlaceholder = deptList.map(() => "?").join(",");
 
-    // 2. 전체 청구 건수 (날짜 필터 + 조직 기반)
+    // 2. 전체 청구 건수 (날짜 필터 + 조직 기반 + 예산 할당 기반)
+    let baseWhere = `(ar.dept_name IN (${deptPlaceholder})`;
+    let baseParams = [...deptList];
+    
+    if (requestedDeptId) {
+      baseWhere += ` OR ar.category_hang IN (
+        SELECT ac.category_id FROM account_categories ac
+        JOIN account_category_departments acd ON ac.id = acd.account_category_id
+        WHERE acd.dept_id = ?
+      )`;
+      baseParams.push(requestedDeptId);
+    }
+    baseWhere += ")";
+
     const [[{ approvalCount }]] = await pool.query(
       `SELECT COUNT(*) AS approvalCount FROM approval_requests ar 
-       WHERE ar.dept_name IN (${deptPlaceholder}) ${dateWhere}`,
-      [...deptList, ...dateParams]
+       WHERE ${baseWhere} ${dateWhere}`,
+      [...baseParams, ...dateParams]
     );
 
     // 3. 내 결재 대기 건수 및 최근 목록 (상세 페이지의 필터링 로직과 동기화)
@@ -2846,23 +2893,24 @@ app.get("/api/portal/summary", async (req, res) => {
     let myApprovalParams = [];
 
     if (isFinance) {
-      // 재정부: (재정부 건 중 결재진행중/결재완료) + (타부서 건 중 결재완료)
+      // 재정부: (전체 건 중 결재진행중/결재완료) + (타부서 건 중 결재완료)
+      // (이미 baseWhere가 교회 전체를 포함하고 있으므로 필터만 적용)
       myApprovalWhere = `
-        WHERE ar.dept_name IN (${deptPlaceholder})
+        WHERE ${baseWhere}
         AND (
           (ar.dept_name = '재정부' AND ar.status IN ('결재진행중', '결재완료'))
           OR (ar.dept_name != '재정부' AND ar.status = '결재완료')
         )
       `;
-      myApprovalParams = [...deptList];
+      myApprovalParams = [...baseParams];
     } else {
       // 일반: 소속 부서군 내 본인이 현재 결재자인 건
       myApprovalWhere = `
-        WHERE ar.dept_name IN (${deptPlaceholder})
+        WHERE ${baseWhere}
         AND ar.current_approver_user_id = ? 
         AND ar.status = '결재진행중'
       `;
-      myApprovalParams = [...deptList, userId];
+      myApprovalParams = [...baseParams, userId];
     }
 
     const [[{ myApprovalCount }]] = await pool.query(
