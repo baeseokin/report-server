@@ -503,11 +503,22 @@ app.post("/api/approvalList", async (req, res) => {
   }
 
   try {
-    const { deptName: rawDeptName, documentType, startDate, endDate, status, approverUserId, page = 1, pageSize = 10 } = req.body;
+    const { deptName: rawDeptName, documentType, startDate, endDate, status, keyword, page = 1, pageSize = 10 } = req.body;
     const deptName = rawDeptName?.trim();
 
     let where = "WHERE 1=1";
     const params = [];
+
+    if (keyword) {
+      const k = `%${keyword}%`;
+      where += ` AND (
+        ar.aliasName LIKE ? OR 
+        ar.author LIKE ? OR 
+        ar.payee LIKE ? OR 
+        EXISTS (SELECT 1 FROM approval_items ai WHERE ai.request_id = ar.id AND ai.detail LIKE ?)
+      )`;
+      params.push(k, k, k, k);
+    }
 
     // ✅ 1. 검색 대상 부서의 ID 및 정확한 부서명 조회
     const [[deptInfo]] = await pool.query("SELECT id, dept_name FROM departments WHERE dept_name = ?", [deptName]);
