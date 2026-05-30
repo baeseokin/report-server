@@ -2403,6 +2403,39 @@ app.get("/api/expenses/summary", async (req, res) => {
 });
 
 /* ------------------------------------------------
+   🔍 지출내역(detail) 자동완성 이력 조회 API
+   GET /api/expenses/history/details
+------------------------------------------------ */
+app.get("/api/expenses/history/details", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const deptId = req.session.user.deptId;
+    if (!deptId) {
+      return res.json({ success: true, details: [] });
+    }
+
+    const [rows] = await pool.query(
+      `SELECT DISTINCT detail 
+       FROM approval_items
+       WHERE dept_id = ?
+         AND detail IS NOT NULL 
+         AND TRIM(detail) != ''
+       ORDER BY detail ASC
+       LIMIT 50`,
+      [deptId]
+    );
+
+    res.json({ success: true, details: rows.map(r => r.detail) });
+  } catch (err) {
+    console.error("❌ /api/expenses/history/details 오류:", err);
+    res.status(500).json({ success: false, message: "조회 실패" });
+  }
+});
+
+/* ------------------------------------------------
    📊 부서 + '항' 기준 예산/지출/잔액 조회 API (직접 매핑만)
    GET /api/expenses/summaryByCategory?deptId=1&year=2025&hangCategoryId=2001
 
