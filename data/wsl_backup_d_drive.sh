@@ -5,7 +5,7 @@
 
 # 백업할 대상 디렉토리 (WSL 환경의 D드라이브 경로)
 # Windows의 D:\Backup\report_uploads 에 해당합니다. 필요시 경로를 수정하세요.
-BACKUP_DIR="/mnt/d/Backup/report_uploads"
+BACKUP_DIR="/mnt/d/file_backup/report_uploads"
 
 # 날짜를 포함한 백업 파일명 생성
 DATE="$(date +"%Y%m%d_%H%M%S")"
