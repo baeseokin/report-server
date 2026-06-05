@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: uploads-pv-d-drive
+  labels:
+    type: local
+spec:
+  capacity:
+    storage: 200Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: manual-d-drive
+  hostPath:
+    # 서버 환경(OS)에 맞게 경로를 수정해야 합니다.
+    # - Linux에 마운트된 경우: /mnt/d/report-uploads
+    # - Windows Docker Desktop인 경우: /run/desktop/mnt/host/d/report-uploads
+    # - 기본적으로 요청하신 D:/report-uploads 로 설정해 두었습니다.
+    path: /run/desktop/mnt/host/d/report-uploads
+    type: DirectoryOrCreate

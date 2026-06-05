@@ -63,7 +63,7 @@ spec:
       volumes:
         - name: uploads
           persistentVolumeClaim:
-            claimName: uploads-pvc       # hostpath(StorageClass)로 Bound 된 PVC
+            claimName: uploads-pvc       # manual-d-drive(StorageClass)로 Bound 된 PVC
 ---
 apiVersion: v1
 kind: Service

@@ -4,10 +4,10 @@ metadata:
   name: uploads-pvc
   namespace: report
 spec:
-  storageClassName: hostpath   # ★ 현재 클러스터가 실제로 쓰는 SC
+  # 위에서 만든 PV의 storageClassName과 동일하게 맞춤 (기존 hostpath 제거)
+  storageClassName: manual-d-drive
   accessModes:
-    - ReadWriteOnce            # hostpath는 보통 RWO만 지원
+    - ReadWriteOnce
   resources:
     requests:
       storage: 200Gi
-
