@@ -1250,6 +1250,7 @@ app.post("/api/login", async (req, res) => {
       deptName: user.dept_name,
       deptId: user.dept_id,
       roles: roles.length > 0 ? roles : [],
+      requirePasswordChange: user.require_password_change === 1,
     };
     console.log("✅ 로그인 성공:", user.user_id, "→ 세션 저장됨");
     return res.json({ success: true, user: req.session.user });
@@ -1559,6 +1560,63 @@ app.delete("/api/users/:id", async (req, res) => {
     res.status(500).json({ success: false, message: "삭제 중 오류가 발생했습니다." });
   } finally {
     conn.release();
+  }
+});
+
+// ── ✅ 사용자 비밀번호 초기화 (관리자 전용)
+app.post("/api/users/:id/reset-password", async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ message: "로그인이 필요합니다." });
+
+  const targetUserId = req.params.id;
+  const isAuthorized = Array.isArray(req.session.user.roles) &&
+    req.session.user.roles.some(r => r.role_name === "관리자" || r.role_name === "재정부");
+
+  if (!isAuthorized) {
+    return res.status(403).json({ message: "관리자 권한이 필요합니다." });
+  }
+
+  try {
+    const defaultPassword = "0000";
+    const hash = await bcrypt.hash(defaultPassword, 10);
+    await pool.query(
+      "UPDATE users SET password_hash=?, require_password_change=1 WHERE id=?",
+      [hash, targetUserId]
+    );
+    res.json({ success: true, message: "비밀번호가 '0000'으로 초기화되었습니다." });
+  } catch (err) {
+    console.error("❌ 비밀번호 초기화 오류:", err);
+    res.status(500).json({ success: false, message: "비밀번호 초기화 실패" });
+  }
+});
+
+// ── ✅ 사용자 비밀번호 변경 (최초 로그인 또는 본인 변경)
+app.post("/api/users/:id/change-password", async (req, res) => {
+  if (!req.session.user) return res.status(401).json({ message: "로그인이 필요합니다." });
+
+  const targetUserId = req.params.id;
+  if (String(req.session.user.id) !== String(targetUserId)) {
+    return res.status(403).json({ message: "본인의 비밀번호만 변경 가능합니다." });
+  }
+
+  const { newPassword } = req.body;
+  if (!newPassword || newPassword.length < 4) {
+    return res.status(400).json({ success: false, message: "비밀번호는 4자 이상이어야 합니다." });
+  }
+
+  try {
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query(
+      "UPDATE users SET password_hash=?, require_password_change=0 WHERE id=?",
+      [hash, targetUserId]
+    );
+    
+    // 세션 정보 업데이트
+    req.session.user.requirePasswordChange = false;
+
+    res.json({ success: true, message: "비밀번호가 성공적으로 변경되었습니다." });
+  } catch (err) {
+    console.error("❌ 비밀번호 변경 오류:", err);
+    res.status(500).json({ success: false, message: "비밀번호 변경 실패" });
   }
 });
 
