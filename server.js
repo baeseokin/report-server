@@ -1423,7 +1423,7 @@ app.post("/api/users", async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     const [result] = await conn.query(
-      "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO users (user_id, user_name, email, phone, dept_name, password_hash, require_password_change) VALUES (?, ?, ?, ?, ?, ?, 1)",
       [userId, name, email, phone, dept, hash]
     );
     const insertedUserId = result.insertId;
