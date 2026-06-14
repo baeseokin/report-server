@@ -210,7 +210,7 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang } =
+    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang, accountInfo, requesterPhone } =
       req.body;
     // 영수인(payee)이 없으면 작성자(author)로 기본값 설정
     const payee = (req.body.payee && req.body.payee.trim() !== "") ? req.body.payee.trim() : author;
@@ -259,9 +259,9 @@ app.post("/api/approval", async (req, res) => {
 
       await conn.query(
         `UPDATE approval_requests 
-         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?
+         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?, account_info = ?, requester_phone = ?
          WHERE id = ?`,
-        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, payee, requestId]
+        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, requestId]
       );
 
       // 기존 항목 삭제 후 재삽입 (단순하게 처리)
@@ -269,9 +269,9 @@ app.post("/api/approval", async (req, res) => {
     } else {
       const [result] = await conn.query(
         `INSERT INTO approval_requests 
-         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang, payee) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang, payee]
+         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang, payee, account_info, requester_phone) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang, payee, accountInfo, requesterPhone]
       );
       requestId = result.insertId;
     }
@@ -724,6 +724,8 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       selectedHang: request.category_hang,
       gwanName: request.gwan_name, // 명칭 추가
       hangName: request.hang_name, // 명칭 추가
+      accountInfo: request.account_info,
+      requesterPhone: request.requester_phone,
       items: items.map(i => ({
         ...i,
         mokName: i.mok_name,     // 명칭 추가
@@ -1247,6 +1249,7 @@ app.post("/api/login", async (req, res) => {
       userId: user.user_id,
       userName: user.user_name,
       email: user.email,
+      phone: user.phone,
       deptName: user.dept_name,
       deptId: user.dept_id,
       roles: roles.length > 0 ? roles : [],
@@ -1916,7 +1919,7 @@ app.delete("/api/access/:roleId", async (req, res) => {
 app.get("/api/departments", async (_req, res) => {
   try {
     const [rows] = await pool.query(
-      "SELECT id, dept_name, dept_cd, parent_dept_id FROM departments ORDER BY id"
+      "SELECT id, dept_name, dept_cd, parent_dept_id, account_info FROM departments ORDER BY id"
     );
     res.json(rows);
   } catch (err) {
@@ -1928,15 +1931,15 @@ app.get("/api/departments", async (_req, res) => {
 // 부서 추가
 app.post("/api/departments", async (req, res) => {
   try {
-    const { dept_name, dept_cd, parent_dept_id } = req.body;
+    const { dept_name, dept_cd, parent_dept_id, account_info } = req.body;
 
     if (!dept_name || !dept_cd) {
       return res.status(400).json({ error: "부서명과 코드가 필요합니다." });
     }
 
     const [result] = await pool.query(
-      "INSERT INTO departments (dept_name, dept_cd, parent_dept_id) VALUES (?, ?, ?)",
-      [dept_name, dept_cd, parent_dept_id || null]
+      "INSERT INTO departments (dept_name, dept_cd, parent_dept_id, account_info) VALUES (?, ?, ?, ?)",
+      [dept_name, dept_cd, parent_dept_id || null, account_info || null]
     );
 
     res.status(201).json({ success: true, id: result.insertId });
@@ -1949,7 +1952,7 @@ app.post("/api/departments", async (req, res) => {
 // 부서 수정
 app.put("/api/departments/:id", async (req, res) => {
   try {
-    const { dept_name, dept_cd, parent_dept_id } = req.body;
+    const { dept_name, dept_cd, parent_dept_id, account_info } = req.body;
     const deptId = req.params.id;
 
     if (!dept_name || !dept_cd) {
@@ -1957,8 +1960,8 @@ app.put("/api/departments/:id", async (req, res) => {
     }
 
     const [result] = await pool.query(
-      "UPDATE departments SET dept_name = ?, dept_cd = ?, parent_dept_id = ? WHERE id = ?",
-      [dept_name, dept_cd, parent_dept_id || null, deptId]
+      "UPDATE departments SET dept_name = ?, dept_cd = ?, parent_dept_id = ?, account_info = ? WHERE id = ?",
+      [dept_name, dept_cd, parent_dept_id || null, account_info || null, deptId]
     );
 
     if (result.affectedRows === 0) {
