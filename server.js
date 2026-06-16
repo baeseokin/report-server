@@ -210,7 +210,7 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang, accountInfo, requesterPhone } =
+    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang, accountInfo, requesterPhone, updateDeptAccountInfo } =
       req.body;
     // 영수인(payee)이 없으면 작성자(author)로 기본값 설정
     const payee = (req.body.payee && req.body.payee.trim() !== "") ? req.body.payee.trim() : author;
@@ -243,6 +243,14 @@ app.post("/api/approval", async (req, res) => {
     const deptId = deptRow.id;
     const requestYear = new Date(date).getFullYear();
 
+
+    // ✅ 부서 기본 계좌정보 업데이트 (사용자가 변경하고 체크박스 선택 시)
+    if (updateDeptAccountInfo && accountInfo && accountInfo.trim() !== "") {
+      await conn.query(
+        "UPDATE departments SET account_info = ? WHERE id = ?",
+        [accountInfo.trim(), deptId]
+      );
+    }
 
     // approval_requests 저장 (재정부→타부서 요청 시 status = 결재완료, 그 외 결재진행중)
     let requestId = id;
