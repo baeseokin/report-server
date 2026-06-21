@@ -105,6 +105,12 @@ console.log(`📦 DB → ${envPick("DB_HOST", "localhost")}:${envNumber("DB_PORT
       await pool.query("ALTER TABLE approval_requests ADD COLUMN payee VARCHAR(100) AFTER author");
       console.log("✅ [Migration] payee 컬럼 추가 완료");
     }
+    const hasRemarks = rows.some(r => r.Field === 'remarks');
+    if (!hasRemarks) {
+      console.log("🛠 [Migration] approval_requests 테이블에 remarks 컬럼이 없어 추가합니다.");
+      await pool.query("ALTER TABLE approval_requests ADD COLUMN remarks TEXT AFTER comment");
+      console.log("✅ [Migration] remarks 컬럼 추가 완료");
+    }
   } catch (err) {
     console.error("❌ [Migration] 스키마 확인 중 오류:", err.message);
   }
@@ -210,7 +216,7 @@ app.post("/api/approval", async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { id, documentType, author, userId, date, totalAmount, comment, aliasName, items, selectedGwan, selectedHang, accountInfo, requesterPhone, updateDeptAccountInfo } =
+    const { id, documentType, author, userId, date, totalAmount, comment, remarks, aliasName, items, selectedGwan, selectedHang, accountInfo, requesterPhone, updateDeptAccountInfo } =
       req.body;
     // 영수인(payee)이 없으면 작성자(author)로 기본값 설정
     const payee = (req.body.payee && req.body.payee.trim() !== "") ? req.body.payee.trim() : author;
@@ -267,9 +273,9 @@ app.post("/api/approval", async (req, res) => {
 
       await conn.query(
         `UPDATE approval_requests 
-         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?, account_info = ?, requester_phone = ?
+         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, remarks = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?, account_info = ?, requester_phone = ?
          WHERE id = ?`,
-        [documentType, deptName, date, totalAmount, comment, aliasName, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, requestId]
+        [documentType, deptName, date, totalAmount, comment, remarks, aliasName, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, requestId]
       );
 
       // 기존 항목 삭제 후 재삽입 (단순하게 처리)
@@ -277,9 +283,9 @@ app.post("/api/approval", async (req, res) => {
     } else {
       const [result] = await conn.query(
         `INSERT INTO approval_requests 
-         (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, category_gwan, category_hang, payee, account_info, requester_phone) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [documentType, deptName, author, date, totalAmount, comment, aliasName, initialStatus, selectedGwan, selectedHang, payee, accountInfo, requesterPhone]
+         (document_type, dept_name, author, request_date, total_amount, comment, remarks, aliasName, status, category_gwan, category_hang, payee, account_info, requester_phone) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, date, totalAmount, comment, remarks, aliasName, initialStatus, selectedGwan, selectedHang, payee, accountInfo, requesterPhone]
       );
       requestId = result.insertId;
     }
@@ -727,6 +733,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       request_date: request.request_date,
       total_amount: request.total_amount,
       comment: request.comment,
+      remarks: request.remarks,
       aliasName: request.aliasName,
       selectedGwan: request.category_gwan,
       selectedHang: request.category_hang,
