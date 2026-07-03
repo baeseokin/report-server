@@ -589,6 +589,8 @@ app.post("/api/approvalList", async (req, res) => {
     if (documentType) {
       where += " AND ar.document_type = ?";
       params.push(documentType);
+    } else {
+      where += " AND ar.document_type != '가청구건'";
     }
     if (startDate) {
       where += " AND ar.request_date >= ?";
@@ -2407,6 +2409,79 @@ app.post("/api/budgets/bulk", async (req, res) => {
     await conn.rollback();
     console.error("❌ bulk 예산 저장 실패:", err);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
+/* ------------------------------------------------
+   가청구건(기지출액) 일괄 저장 API
+   POST /api/dummy-claims
+------------------------------------------------ */
+app.post("/api/dummy-claims", async (req, res) => {
+  const user = req.session.user;
+  if (!user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+  
+  const isFinanceDept = user.deptName?.includes("재정부") || user.dept_name?.includes("재정부");
+  const hasAuthRole = user.roles && user.roles.some(r => r.role_name?.includes("admin") || r.role_name?.includes("관리자") || r.role_name?.includes("재정부"));
+  
+  if (!isFinanceDept && !hasAuthRole) {
+    return res.status(403).json({ success: false, message: "접근 권한이 없습니다." });
+  }
+
+  const { dept_id, dept_name, year, request_date, items } = req.body;
+  if (!dept_id || !year || !Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ success: false, message: "잘못된 요청 파라미터입니다." });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const totalAmount = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+
+    // 1. 기존 가청구건(동일 부서, 연도)이 있다면 삭제 (선택적 구현이나, 여기서는 단순히 새로 추가)
+    // 1회성이거나 덮어쓰기 로직이 필요하다면 여기에 추가.
+    // 안전을 위해 INSERT만 수행
+
+    // 2. approval_requests 더미 문서 생성
+    const [reqResult] = await conn.query(
+      `INSERT INTO approval_requests 
+        (document_type, dept_name, author, request_date, total_amount, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      ["가청구건", dept_name, "시스템_마이그레이션", request_date || new Date().toISOString().split("T")[0], totalAmount, "재정부이관완료"]
+    );
+    const requestId = reqResult.insertId;
+
+    // 3. approval_items 및 expense_details 생성
+    for (const item of items) {
+      if (item.amount <= 0) continue;
+
+      // approval_items (항 레벨에서 입력하므로 mok, semok은 '-')
+      await conn.query(
+        `INSERT INTO approval_items 
+          (request_id, gwan, hang, mok, semok, detail, amount, dept_id, year)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [requestId, item.gwan_id || '-', item.hang_id, '-', '-', '초기 기지출액', item.amount, dept_id, year]
+      );
+
+      // expense_details (budget-status 조회 시 활용)
+      await conn.query(
+        `INSERT INTO expense_details
+          (dept_id, category_id, year, expense_date, amount, description, approval_request_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+        [dept_id, item.hang_id, year, request_date || new Date().toISOString().split("T")[0], item.amount, '초기 기지출액', requestId]
+      );
+    }
+
+    await conn.commit();
+    res.json({ success: true, message: "가청구건이 등록되었습니다." });
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ 가청구건 등록 실패:", err);
+    res.status(500).json({ success: false, message: "가청구건 등록 중 오류가 발생했습니다." });
   } finally {
     conn.release();
   }
