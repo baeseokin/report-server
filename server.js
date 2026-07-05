@@ -517,7 +517,7 @@ app.post("/api/approvalList", async (req, res) => {
   }
 
   try {
-    const { deptName: rawDeptName, documentType, startDate, endDate, status, keyword, page = 1, pageSize = 10 } = req.body;
+    const { deptName: rawDeptName, documentType, startDate, endDate, status, keyword, selectedGwan, selectedHang, page = 1, pageSize = 10 } = req.body;
     const deptName = rawDeptName?.trim();
 
     let where = "WHERE 1=1";
@@ -601,6 +601,17 @@ app.post("/api/approvalList", async (req, res) => {
       where += " AND ar.request_date <= CONCAT(?, ' 23:59:59')";
       params.push(endDate);
     }
+    
+    // ✅ 관/항 검색 조건 추가
+    if (selectedGwan) {
+      where += " AND ar.category_gwan = ?";
+      params.push(selectedGwan);
+    }
+    if (selectedHang) {
+      where += " AND ar.category_hang = ?";
+      params.push(selectedHang);
+    }
+
     // ✅ 진행상태 및 권한별 필터링 (홈 화면 summary 로직과 동기화)
     const isFinance = req.session.user?.deptName === "재정부";
     const userId = req.session.user?.userId;
