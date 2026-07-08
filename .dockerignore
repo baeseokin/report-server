@@ -1,0 +1,10 @@
+node_modules
+.git
+.DS_Store
+uploads
+data
+scratch
+npm-debug.log
+yarn-error.log
+.env_local
+server.log
