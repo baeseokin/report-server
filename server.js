@@ -3257,7 +3257,7 @@ app.get("/api/portal/summary", async (req, res) => {
       )`;
       baseParams.push(requestedDeptId);
     }
-    baseWhere += ")";
+    baseWhere += ") AND ar.document_type != '가청구건'";
 
     const [[{ approvalCount }]] = await pool.query(
       `SELECT COUNT(*) AS approvalCount FROM approval_requests ar 
