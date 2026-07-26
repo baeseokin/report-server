@@ -33,10 +33,10 @@ if [ $? -ne 0 ]; then
 fi
 
 # 4. Kubernetes Deployment 업데이트
-echo "📡 Kubernetes 배포 업데이트..."
-kubectl set image deployment/report-server report-server=$IMAGE_NAME:$VERSION -n report
+#echo "📡 Kubernetes 배포 업데이트..."
+#kubectl set image deployment/report-server report-server=$IMAGE_NAME:$VERSION -n report
 
 # 5. 롤아웃 확인
-kubectl rollout status deployment/report-server -n report
+#kubectl rollout status deployment/report-server -n report
 
 echo "✅ report-server 배포 완료!"
