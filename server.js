@@ -430,7 +430,7 @@ app.delete("/api/approval/:id", async (req, res) => {
 
     // 1. 권한 및 상태 확인
     const [existing] = await conn.query(
-      "SELECT author, (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as h_count FROM approval_requests ar WHERE ar.id = ?",
+      "SELECT author, status, (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as h_count FROM approval_requests ar WHERE ar.id = ?",
       [id]
     );
 
@@ -438,17 +438,30 @@ app.delete("/api/approval/:id", async (req, res) => {
       throw new Error("삭제할 요청을 찾을 수 없습니다.");
     }
 
-    const { author, h_count } = existing[0];
+    const { author, status, h_count } = existing[0];
     const loginUser = req.session.user;
 
-    // 기안자 본인 확인
-    if (author !== loginUser.userName) {
-      throw new Error("삭제 권한이 없습니다.");
+    // 1. 상태에 따른 강제 차단 (어떤 권한이든)
+    if (status === '결재완료' || status === '재정부이관완료') {
+      throw new Error("결재완료 또는 재정부이관완료 상태의 문서는 삭제할 수 없습니다.");
     }
 
-    // 결재 진행 여부 확인 (최초 등록 시 history 1개가 이미 존재)
-    if (h_count > 1) {
-      throw new Error("이미 결재가 진행되어 삭제할 수 없습니다.");
+    // 2. 삭제 권한 확인 (본인, 관리자, 재정부)
+    const isOwner = author === loginUser.userName;
+    const isAdminUser = loginUser.roles?.some(r => r === '관리자' || r.role_name === '관리자');
+    const isFinanceUser = loginUser.deptName === '재정부';
+    const hasPrivilege = isAdminUser || isFinanceUser;
+
+    let canDelete = false;
+
+    if (isOwner && h_count === 1) {
+      canDelete = true;
+    } else if (hasPrivilege) {
+      canDelete = true;
+    }
+
+    if (!canDelete) {
+      throw new Error("권한이 없거나 삭제할 수 없는 상태입니다.");
     }
 
     // 2. 관련 파일 삭제 (물리 파일 + DB)
@@ -1112,7 +1125,7 @@ app.post("/api/approval/reject", upload.single("signature"), async (req, res) =>
 /* ------------------------------------------------
    ✅ 파일 업로드/다운로드 API
 ------------------------------------------------ */
-app.post("/api/approval/:id/files", upload.array("files", 10), async (req, res) => {
+app.post("/api/approval/:id/files", upload.array("files", 50), async (req, res) => {
   if (!req.session.user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
@@ -3079,7 +3092,7 @@ app.get("/api/notices/:id", async (req, res) => {
 });
 
 // 3. 공지사항 등록 (관리자 및 재정부 가능)
-app.post("/api/notices", upload.array("files", 10), async (req, res) => {
+app.post("/api/notices", upload.array("files", 50), async (req, res) => {
   if (!isAdmin(req) && req.session.user?.deptName !== '재정부') {
     return res.status(403).json({ success: false, message: "관리자 또는 재정부 권한이 필요합니다." });
   }
@@ -3120,7 +3133,7 @@ app.post("/api/notices", upload.array("files", 10), async (req, res) => {
 });
 
 // 4. 공지사항 수정 (관리자 및 재정부 가능)
-app.put("/api/notices/:id", upload.array("files", 10), async (req, res) => {
+app.put("/api/notices/:id", upload.array("files", 50), async (req, res) => {
   if (!isAdmin(req) && req.session.user?.deptName !== '재정부') {
     return res.status(403).json({ success: false, message: "관리자 또는 재정부 권한이 필요합니다." });
   }
@@ -3356,6 +3369,21 @@ app.get("/api/portal/summary", async (req, res) => {
 /* ------------------------------------------------
    ✅ 서버 실행
 ------------------------------------------------ */
+// ✅ 전역 에러 핸들러 (Multer 오류 등 처리)
+app.use((err, req, res, next) => {
+  if (err && err.name === 'MulterError') {
+    console.error("Multer Error:", err.message, err.code, err.field);
+    return res.status(400).json({ 
+      success: false, 
+      message: err.code === 'LIMIT_UNEXPECTED_FILE' 
+        ? "첨부파일이 너무 많거나 잘못된 파일 필드입니다." 
+        : `파일 업로드 오류: ${err.message}` 
+    });
+  }
+  next(err);
+});
+
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on 0.0.0.0:${PORT} (${ENV})`);
 });
