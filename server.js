@@ -1228,6 +1228,9 @@ app.get("/api/files/:filename", async (req, res) => {
     }
 
     if (dbPath && fs.existsSync(dbPath)) {
+      if (req.query.downloadName) {
+        return res.download(dbPath, req.query.downloadName);
+      }
       return res.sendFile(dbPath);
     }
 
