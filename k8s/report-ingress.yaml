@@ -5,6 +5,10 @@ metadata:
   namespace: report
   annotations: 
     nginx.ingress.kubernetes.io/proxy-body-size: "150m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/client-body-timeout: "300"
 spec:
   ingressClassName: nginx
   rules:
