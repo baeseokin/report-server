@@ -552,11 +552,12 @@ app.post("/api/approvalList", async (req, res) => {
     const requestedDeptId = deptInfo?.id;
     const requestedDeptName = deptInfo?.dept_name || deptName;
 
-    // ✅ 2. 현재 부서 + 하위부서 재귀 조회
+    // ✅ 2. 부서 조건 검사 (교회, 재정부일 경우 전체 조회이므로 조건 생략)
     let deptList = [];
-    const effectiveDeptName = (requestedDeptName === "재정부") ? "교회" : requestedDeptName;
-    
-    if (effectiveDeptName) {
+    const isFullAccessDept = (requestedDeptName === "교회" || requestedDeptName === "재정부");
+
+    if (requestedDeptName && !isFullAccessDept) {
+      // 해당 부서 + 하위부서 재귀 조회
       const [subDepts] = await pool.query(
         `WITH RECURSIVE sub_depts AS (
           SELECT id, dept_name, parent_dept_id
@@ -568,33 +569,20 @@ app.post("/api/approvalList", async (req, res) => {
           INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
         )
         SELECT dept_name FROM sub_depts`,
-        [effectiveDeptName]
+        [requestedDeptName]
       );
       deptList = subDepts.map(d => d.dept_name);
     }
 
-    // ✅ 2. 전체 필터 조각들을 담을 배열
     let whereParts = [];
 
     // ✅ 3. 부서 및 하위부서 조건 추가
-    if (deptList.length > 0) {
+    if (!isFullAccessDept && deptList.length > 0) {
       whereParts.push(`ar.dept_name IN (${deptList.map(() => "?").join(",")})`);
       params.push(...deptList);
     }
 
-    // ✅ 4. 해당 부서에 할당된 모든 계정(account_category_departments 매핑 기준) 포함
-    // (관리자/재정부 등이 '전체' 검색 시 requestedDeptId가 없을 수 있음)
-    if (requestedDeptId) {
-      whereParts.push(`ar.category_hang IN (
-        SELECT ac.category_id 
-          FROM account_categories ac
-          JOIN account_category_departments acd ON ac.id = acd.account_category_id
-         WHERE acd.dept_id = ?
-      )`);
-      params.push(requestedDeptId);
-    }
-
-    // ✅ 5. 부서 관련 조건들을 OR로 묶어서 하나로 처리 (중복 방지)
+    // ✅ 4. 부서 관련 조건들을 하나로 처리
     if (whereParts.length > 0) {
       where += ` AND (${whereParts.join(" OR ")})`;
     }
@@ -614,7 +602,7 @@ app.post("/api/approvalList", async (req, res) => {
       where += " AND ar.request_date <= CONCAT(?, ' 23:59:59')";
       params.push(endDate);
     }
-    
+
     // ✅ 관/항 검색 조건 추가
     if (selectedGwan) {
       where += " AND ar.category_gwan = ?";
@@ -1656,7 +1644,7 @@ app.post("/api/users/:id/change-password", async (req, res) => {
       "UPDATE users SET password_hash=?, require_password_change=0 WHERE id=?",
       [hash, targetUserId]
     );
-    
+
     // 세션 정보 업데이트
     req.session.user.requirePasswordChange = false;
 
@@ -2501,10 +2489,10 @@ app.post("/api/dummy-claims-bulk", async (req, res) => {
   if (!user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
-  
+
   const isFinanceDept = user.deptName?.includes("재정부") || user.dept_name?.includes("재정부");
   const hasAuthRole = user.roles && user.roles.some(r => r.role_name?.includes("admin") || r.role_name?.includes("관리자") || r.role_name?.includes("재정부"));
-  
+
   let isGranted = false;
   if (!isFinanceDept && !hasAuthRole && user.roles && user.roles.length > 0) {
     const roleIds = user.roles.map(r => r.id);
@@ -2534,7 +2522,7 @@ app.post("/api/dummy-claims-bulk", async (req, res) => {
     await conn.beginTransaction();
 
     const totalAmount = items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-    
+
     // 이전에 생성된 같은 연도의 '전사 기지출 일괄등록' 더미 결재문서를 찾거나 새로 생성
     const [existingReq] = await conn.query(
       `SELECT id FROM approval_requests 
@@ -2621,10 +2609,10 @@ app.post("/api/dummy-claims", async (req, res) => {
   if (!user) {
     return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
   }
-  
+
   const isFinanceDept = user.deptName?.includes("재정부") || user.dept_name?.includes("재정부");
   const hasAuthRole = user.roles && user.roles.some(r => r.role_name?.includes("admin") || r.role_name?.includes("관리자") || r.role_name?.includes("재정부"));
-  
+
   if (!isFinanceDept && !hasAuthRole) {
     return res.status(403).json({ success: false, message: "접근 권한이 없습니다." });
   }
@@ -3264,7 +3252,7 @@ app.get("/api/portal/summary", async (req, res) => {
     // 2. 전체 청구 건수 (날짜 필터 + 조직 기반 + 예산 할당 기반)
     let baseWhere = `(ar.dept_name IN (${deptPlaceholder})`;
     let baseParams = [...deptList];
-    
+
     if (requestedDeptId) {
       baseWhere += ` OR ar.category_hang IN (
         SELECT ac.category_id FROM account_categories ac
@@ -3376,11 +3364,11 @@ app.get("/api/portal/summary", async (req, res) => {
 app.use((err, req, res, next) => {
   if (err && err.name === 'MulterError') {
     console.error("Multer Error:", err.message, err.code, err.field);
-    return res.status(400).json({ 
-      success: false, 
-      message: err.code === 'LIMIT_UNEXPECTED_FILE' 
-        ? "첨부파일이 너무 많거나 잘못된 파일 필드입니다." 
-        : `파일 업로드 오류: ${err.message}` 
+    return res.status(400).json({
+      success: false,
+      message: err.code === 'LIMIT_UNEXPECTED_FILE'
+        ? "첨부파일이 너무 많거나 잘못된 파일 필드입니다."
+        : `파일 업로드 오류: ${err.message}`
     });
   }
   next(err);
