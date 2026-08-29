@@ -649,7 +649,8 @@ app.post("/api/approvalList", async (req, res) => {
               ar.author, ar.payee, ar.aliasName, ar.status, ar.current_approver_role, ar.current_approver_user_id, 
               ar.category_gwan as selectedGwan, ar.category_hang as selectedHang,
               cg.category_name as gwanName, ch.category_name as hangName,
-              (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as historyCount
+              (SELECT COUNT(*) FROM approval_history WHERE request_id = ar.id) as historyCount,
+              (SELECT COUNT(*) FROM approval_files WHERE request_id = ar.id) as fileCount
        FROM approval_requests ar
        LEFT JOIN account_categories cg ON ar.category_gwan = cg.category_id
        LEFT JOIN account_categories ch ON ar.category_hang = ch.category_id
