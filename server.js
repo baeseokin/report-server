@@ -441,12 +441,7 @@ app.delete("/api/approval/:id", async (req, res) => {
     const { author, status, h_count } = existing[0];
     const loginUser = req.session.user;
 
-    // 1. 상태에 따른 강제 차단 (어떤 권한이든)
-    if (status === '결재완료' || status === '재정부이관완료') {
-      throw new Error("결재완료 또는 재정부이관완료 상태의 문서는 삭제할 수 없습니다.");
-    }
-
-    // 2. 삭제 권한 확인 (본인, 관리자, 재정부)
+    // 1. 삭제 권한 확인 (본인, 관리자, 재정부)
     const isOwner = author === loginUser.userName;
     const isAdminUser = loginUser.roles?.some(r => r === '관리자' || r.role_name === '관리자');
     const isFinanceUser = loginUser.deptName === '재정부';
@@ -454,10 +449,16 @@ app.delete("/api/approval/:id", async (req, res) => {
 
     let canDelete = false;
 
-    if (isOwner && h_count === 1) {
+    if (hasPrivilege) {
       canDelete = true;
-    } else if (hasPrivilege) {
-      canDelete = true;
+    } else {
+      // 일반 사용자의 경우 상태에 따른 강제 차단
+      if (status === '결재완료' || status === '재정부이관완료') {
+        throw new Error("결재완료 또는 재정부이관완료 상태의 문서는 삭제할 수 없습니다.");
+      }
+      if (isOwner && h_count === 1) {
+        canDelete = true;
+      }
     }
 
     if (!canDelete) {
