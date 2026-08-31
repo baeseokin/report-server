@@ -892,6 +892,12 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
 
     } else if (status === "결재완료") {
 
+      // ✅ 재정부 사용자만 결재완료 건을 이관 처리할 수 있도록 권한 검증 추가
+      if (req.session.user.deptName !== '재정부') {
+        await conn.rollback();
+        return res.status(403).json({ success: false, message: "재정부만 이관 승인을 할 수 있습니다." });
+      }
+
       // ✅ 승인 이력 기록: 이 블록은 재정부가 '결재완료' 건을 이관 승인할 때만 진입하므로, 항상 로그인 사용자(재정부) 정보로 기록
       const historyApproverRole = req.session.user.roles?.[0]?.role_name ?? "재정부";
       const historyApproverUserId = req.session.user.userId;
