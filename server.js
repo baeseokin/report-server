@@ -2214,44 +2214,57 @@ app.get("/api/accountCategories", async (req, res) => {
 app.get("/api/accountCategories/:deptId", async (req, res) => {
   try {
     const deptId = req.params.deptId;
-    const { date } = req.query;
+    const { date, year } = req.query;
+    
+    // year 파라미터가 없으면 현재 연도 기준
+    const targetYear = year ? parseInt(year, 10) : new Date().getFullYear();
 
-    // ✅ RECURSIVE CTE를 사용하여 매핑된 계정 및 지출이 있는 계정의 모든 상위(부모) 계정까지 포함
-    let query = `
-      WITH RECURSIVE category_tree AS (
-        -- 초기항: 직접 매핑되었거나 지출 내역이 있는 계정
+    let query = "";
+    const params = [];
+
+    if (deptId === "all") {
+      query = `
         SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at
-          FROM account_categories ac
-          LEFT JOIN account_category_departments acd ON ac.id = acd.account_category_id
-         WHERE acd.dept_id = ?
-            OR ac.category_id IN (
-               SELECT DISTINCT ai.semok FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
-               UNION SELECT ai.mok FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
-               UNION SELECT ai.hang FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
-               UNION SELECT ai.gwan FROM approval_items ai JOIN approval_requests ar ON ai.request_id = ar.id JOIN departments d ON ar.dept_name = d.dept_name WHERE d.id = ?
-            )
-        
-        UNION
-        
-        -- 재귀항: 위에서 선택된 계정들의 부모 계정들을 추적
-        SELECT p.id, p.category_id, p.parent_id, p.category_name, p.level, p.owner_dept_id, p.valid_from, p.valid_to, p.created_at, p.updated_at
-          FROM account_categories p
-          INNER JOIN category_tree c ON c.parent_id = p.id
-      )
-      SELECT DISTINCT ct.*,
-             (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ct.id) AS dept_ids
-        FROM category_tree ct
-       WHERE 1=1
-    `;
-    const params = [deptId, deptId, deptId, deptId, deptId];
+        FROM account_categories ac
+        WHERE 1=1
+      `;
+      if (date) {
+        query += ` AND ac.valid_from <= ? AND (ac.valid_to IS NULL OR ac.valid_to >= ?)`;
+        params.push(date, date);
+      }
+      query += ` ORDER BY category_id`;
+    } else {
+      // ✅ RECURSIVE CTE를 사용하여 매핑된 계정의 모든 상위(부모) 계정까지 포함
+      query = `
+        WITH RECURSIVE category_tree AS (
+          -- 초기항: 특정 연도에 직접 매핑된 계정
+          SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at
+            FROM account_categories ac
+            INNER JOIN account_category_departments acd ON ac.id = acd.account_category_id
+           WHERE acd.dept_id = ? AND acd.year = ?
+          
+          UNION
+          
+          -- 재귀항: 위에서 선택된 계정들의 부모 계정들을 추적
+          SELECT p.id, p.category_id, p.parent_id, p.category_name, p.level, p.owner_dept_id, p.valid_from, p.valid_to, p.created_at, p.updated_at
+            FROM account_categories p
+            INNER JOIN category_tree c ON c.parent_id = p.id
+        )
+        SELECT DISTINCT ct.*,
+               (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ct.id AND year = ?) AS dept_ids
+          FROM category_tree ct
+         WHERE 1=1
+      `;
+      
+      params.push(deptId, targetYear, targetYear);
 
-    // ✅ 기준일자가 있으면 유효기간 조건 추가
-    if (date) {
-      query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
-      params.push(date, date);
+      // ✅ 기준일자가 있으면 유효기간 조건 추가
+      if (date) {
+        query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
+        params.push(date, date);
+      }
+      query += ` ORDER BY category_id`;
     }
-
-    query += ` ORDER BY category_id`;
 
     const [rows] = await pool.query(query, params);
 
@@ -2344,16 +2357,17 @@ app.post("/api/departments/:deptId/account-mapping", async (req, res) => {
   try {
     await conn.beginTransaction();
     const deptId = req.params.deptId;
-    const { categoryIds } = req.body; // [1, 2, 5, ...]
+    const { categoryIds, year } = req.body; // [1, 2, 5, ...], 2026
+    const targetYear = year ? parseInt(year, 10) : new Date().getFullYear();
 
-    // 기존 매핑 삭제
-    await conn.query("DELETE FROM account_category_departments WHERE dept_id = ?", [deptId]);
+    // 기존 매핑 삭제 (연도별)
+    await conn.query("DELETE FROM account_category_departments WHERE dept_id = ? AND year = ?", [deptId, targetYear]);
 
     // 신규 매핑 추가
     if (Array.isArray(categoryIds) && categoryIds.length > 0) {
-      const values = categoryIds.map(catId => [catId, deptId]);
+      const values = categoryIds.map(catId => [targetYear, catId, deptId]);
       await conn.query(
-        `INSERT INTO account_category_departments (account_category_id, dept_id) VALUES ?`,
+        `INSERT INTO account_category_departments (year, account_category_id, dept_id) VALUES ?`,
         [values]
       );
     }
