@@ -2091,6 +2091,40 @@ app.post("/api/approval-lines", async (req, res) => {
   try {
     await conn.beginTransaction();
 
+    // 1. 유효한 부서(자기 자신 및 상위 부서) 목록 조회 (JS 로직으로 안전하게 탐색)
+    const [allDepts] = await conn.query("SELECT id, dept_name, parent_dept_id FROM departments");
+    const validDeptNames = [];
+    const visited = new Set();
+    let currentDept = allDepts.find(d => d.dept_name === deptName);
+    
+    while (currentDept && !visited.has(currentDept.id)) {
+      validDeptNames.push(currentDept.dept_name);
+      visited.add(currentDept.id);
+      currentDept = allDepts.find(d => d.id === currentDept.parent_dept_id);
+    }
+
+    // 2. 등록하려는 사용자들의 소속 부서 검증
+    const userIds = lines.map(line => line?.approver_user_id ?? line?.approverUserId).filter(Boolean);
+    if (userIds.length > 0) {
+      const placeholders = userIds.map(() => '?').join(',');
+      const [users] = await conn.query(
+        `SELECT u.user_id, u.dept_name 
+         FROM users u 
+         WHERE u.user_id IN (${placeholders})`,
+        userIds
+      );
+      
+      for (const u of users) {
+        if (!validDeptNames.includes(u.dept_name)) {
+          await conn.rollback();
+          return res.status(400).json({ 
+            success: false, 
+            message: "같은 부서이거나 상위부서 사용자만 결재선에 등록할 수 있습니다." 
+          });
+        }
+      }
+    }
+
     // 기존 결재선 제거 후 재삽입
     await conn.query("DELETE FROM approval_line WHERE dept_name = ?", [deptName]);
 
@@ -2116,7 +2150,7 @@ app.post("/api/approval-lines", async (req, res) => {
   } catch (err) {
     await conn.rollback();
     console.error("❌ 결재선 저장 실패:", err);
-    res.status(500).json({ success: false, message: "결재선 저장 실패" });
+    res.status(500).json({ success: false, message: "결재선 저장 실패: " + err.message });
   } finally {
     conn.release();
   }
@@ -2160,6 +2194,50 @@ app.put("/api/approval-lines/:id", async (req, res) => {
   }
 
   try {
+    // 부서 검증 로직 추가
+      const [allDepts] = await pool.query("SELECT id, dept_name, parent_dept_id FROM departments");
+      
+      const getValidDeptNames = (targetDeptName) => {
+        const validDeptNames = [];
+        const visited = new Set();
+        let currentDept = allDepts.find(d => d.dept_name === targetDeptName);
+        while (currentDept && !visited.has(currentDept.id)) {
+          validDeptNames.push(currentDept.dept_name);
+          visited.add(currentDept.id);
+          currentDept = allDepts.find(d => d.id === currentDept.parent_dept_id);
+        }
+        return validDeptNames;
+      };
+
+      let validDeptNames = [];
+      let shouldCheckUser = false;
+
+      if (deptName && approverUserId) {
+        validDeptNames = getValidDeptNames(deptName);
+        shouldCheckUser = true;
+      } else if (approverUserId && !deptName) {
+        const [[existing]] = await pool.query("SELECT dept_name FROM approval_line WHERE id = ?", [approvalLineId]);
+        if (existing) {
+          validDeptNames = getValidDeptNames(existing.dept_name);
+          shouldCheckUser = true;
+        }
+      }
+
+      if (shouldCheckUser) {
+        const [[user]] = await pool.query(
+          `SELECT u.dept_name 
+           FROM users u 
+           WHERE u.user_id = ?`,
+          [approverUserId]
+        );
+
+        if (user && !validDeptNames.includes(user.dept_name)) {
+          return res.status(400).json({ 
+            success: false, 
+            message: "같은 부서이거나 상위부서 사용자만 결재선에 등록할 수 있습니다." 
+          });
+        }
+      }
     const [result] = await pool.query(
       `UPDATE approval_line SET ${updateFields.join(", ")} WHERE id = ?`,
       [...params, approvalLineId]
