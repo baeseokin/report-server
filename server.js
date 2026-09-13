@@ -580,6 +580,13 @@ app.post("/api/approvalList", async (req, res) => {
       params.push(...deptList);
     }
 
+    // ✅ 본인이 작성한 건(ar.author = ?)도 함께 조회되도록 OR 조건 부여
+    const currentUserName = req.session.user?.userName;
+    if (!isFullAccessDept && currentUserName) {
+      whereParts.push("ar.author = ?");
+      params.push(currentUserName);
+    }
+
     // ✅ 4. 부서 관련 조건들을 하나로 처리
     if (whereParts.length > 0) {
       where += ` AND (${whereParts.join(" OR ")})`;
