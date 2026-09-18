@@ -639,8 +639,8 @@ app.post("/api/approvalList", async (req, res) => {
 
     }
 
-    const [[{ count }]] = await pool.query(
-      `SELECT COUNT(*) as count FROM approval_requests ar ${where}`,
+    const [[{ count, totalAmount }]] = await pool.query(
+      `SELECT COUNT(*) as count, COALESCE(SUM(ar.total_amount), 0) as totalAmount FROM approval_requests ar ${where}`,
       params
     );
 
@@ -665,7 +665,7 @@ app.post("/api/approvalList", async (req, res) => {
       [...params, pageSize, offset]
     );
 
-    res.json({ success: true, rows, totalPages });
+    res.json({ success: true, rows, totalPages, totalCount: count, totalAmount: Number(totalAmount || 0) });
   } catch (err) {
     console.error("❌ DB Select Error:", err);
     res.status(500).json({ success: false, error: err.message });
