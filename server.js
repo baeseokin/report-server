@@ -550,12 +550,17 @@ app.post("/api/approvalList", async (req, res) => {
     const requestedDeptId = deptInfo?.id;
     const requestedDeptName = deptInfo?.dept_name || deptName;
 
-    // ✅ 2. 부서 조건 검사 (교회, 재정부일 경우 전체 조회이므로 조건 생략)
-    let deptList = [];
-    const isFullAccessDept = (requestedDeptName === "교회" || requestedDeptName === "재정부");
+    // ✅ 2. 전체 조회 권한 확인 (로그인 사용자 기준: 재정부, 교회, 관리자)
+    const sessionDeptName = req.session.user?.deptName;
+    const currentUserName = req.session.user?.userName;
+    const isFullAccessUser = (sessionDeptName === "교회" || sessionDeptName === "재정부" || isAdmin(req));
 
-    if (requestedDeptName && !isFullAccessDept) {
-      // 해당 부서 + 하위부서 재귀 조회
+    // 검색 대상 부서가 "교회", "재정부"이거나 없는 경우 전체 조회로 간주
+    const isSearchAll = !requestedDeptName || requestedDeptName === "전체" || requestedDeptName === "교회" || requestedDeptName === "재정부";
+
+    let deptList = [];
+    if (!isSearchAll) {
+      // 특정 부서가 지정된 경우: 해당 부서 + 하위부서 재귀 조회
       const [subDepts] = await pool.query(
         `WITH RECURSIVE sub_depts AS (
           SELECT id, dept_name, parent_dept_id
@@ -570,19 +575,34 @@ app.post("/api/approvalList", async (req, res) => {
         [requestedDeptName]
       );
       deptList = subDepts.map(d => d.dept_name);
+    } else if (!isFullAccessUser && sessionDeptName) {
+      // 일반 사용자가 부서를 지정하지 않은 경우: 본인 소속 부서 + 하위부서로 제한
+      const [subDepts] = await pool.query(
+        `WITH RECURSIVE sub_depts AS (
+          SELECT id, dept_name, parent_dept_id
+          FROM departments
+          WHERE dept_name = ?
+          UNION ALL
+          SELECT d.id, d.dept_name, d.parent_dept_id
+          FROM departments d
+          INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
+        )
+        SELECT dept_name FROM sub_depts`,
+        [sessionDeptName]
+      );
+      deptList = subDepts.map(d => d.dept_name);
     }
 
     let whereParts = [];
 
     // ✅ 3. 부서 및 하위부서 조건 추가
-    if (!isFullAccessDept && deptList.length > 0) {
+    if (deptList.length > 0) {
       whereParts.push(`ar.dept_name IN (${deptList.map(() => "?").join(",")})`);
       params.push(...deptList);
     }
 
-    // ✅ 본인이 작성한 건(ar.author = ?)도 함께 조회되도록 OR 조건 부여
-    const currentUserName = req.session.user?.userName;
-    if (!isFullAccessDept && currentUserName) {
+    // ✅ 본인이 작성한 건(ar.author = ?)도 함께 조회되도록 OR 조건 부여 (일반 사용자만)
+    if (!isFullAccessUser && currentUserName) {
       whereParts.push("ar.author = ?");
       params.push(currentUserName);
     }
