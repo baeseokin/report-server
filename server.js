@@ -258,6 +258,75 @@ app.post("/api/approval", async (req, res) => {
       );
     }
 
+    // ✅ 2. 다음 결재자 계산 (결재진행중일 때)
+    let nextApprovers = null;
+    let nextOrderNo = null;
+    let currentApproverRole = null;
+    let currentApproverUserId = null;
+
+    if (initialStatus === "결재진행중") {
+      if (req.body.selectedChoice === "owner") {
+        // ✅ 2안(Owner 부서 위원장 직행) 선택 시
+        const [chairmanRows] = await conn.query(
+          `SELECT approver_role, approver_user_id, order_no
+             FROM approval_line 
+            WHERE dept_name = ? AND approver_role = '위원장'`,
+          [deptName]
+        );
+        if (chairmanRows.length === 0) {
+          throw new Error(`${deptName} 부서에 '위원장' 결재선이 등록되어 있지 않습니다. 결재선 설정을 확인해 주세요.`);
+        }
+        nextApprovers = chairmanRows;
+        nextOrderNo = chairmanRows[0].order_no;
+      } else {
+        // ✅ 1안(부서별 기본순서): 기안자 결재선 확인
+        const [applicantRows] = await conn.query(
+          `SELECT order_no 
+             FROM approval_line 
+            WHERE dept_name = ? AND approver_user_id = ?
+            LIMIT 1`,
+          [deptName, userId]
+        );
+
+        // ❌ 상신자가 결재선에 없을 경우 명확한 에러 반환
+        if (applicantRows.length === 0) {
+          throw new Error(`${deptName} 부서의 결재선에 기안자(${author || userId})가 등록되어 있지 않습니다. 결재선 관리에서 담당자 등록 후 다시 시도해 주세요.`);
+        }
+
+        const applicantOrder = applicantRows[0].order_no;
+
+        // ✅ 기안자 순번 이후의 첫 번째 결재자 순번 찾기 (순번 공백/건너뜀 대응)
+        const [[nextOrderRow]] = await conn.query(
+          `SELECT MIN(order_no) AS next_order_no
+             FROM approval_line
+            WHERE dept_name = ? AND order_no > ?`,
+          [deptName, applicantOrder]
+        );
+
+        if (!nextOrderRow || nextOrderRow.next_order_no == null) {
+          throw new Error(`${deptName} 부서 결재선에 기안자 다음 결재자가 존재하지 않습니다. 결재선 설정을 확인해 주세요.`);
+        }
+
+        nextOrderNo = nextOrderRow.next_order_no;
+
+        const [nextRows] = await conn.query(
+          `SELECT approver_role, approver_user_id, order_no 
+             FROM approval_line 
+            WHERE dept_name = ? AND order_no = ?`,
+          [deptName, nextOrderNo]
+        );
+
+        if (nextRows.length === 0) {
+          throw new Error(`${deptName} 부서 결재선에서 순번(${nextOrderNo})에 해당하는 결재자 정보를 찾을 수 없습니다.`);
+        }
+
+        nextApprovers = nextRows;
+      }
+
+      currentApproverRole = [...new Set(nextApprovers.map(a => a.approver_role))].join(',');
+      currentApproverUserId = nextApprovers.map(a => a.approver_user_id).join(',');
+    }
+
     // approval_requests 저장 (재정부→타부서 요청 시 status = 결재완료, 그 외 결재진행중)
     let requestId = id;
     if (requestId) {
@@ -273,9 +342,10 @@ app.post("/api/approval", async (req, res) => {
 
       await conn.query(
         `UPDATE approval_requests 
-         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, remarks = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?, account_info = ?, requester_phone = ?
+         SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, remarks = ?, aliasName = ?, category_gwan = ?, category_hang = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00'), payee = ?, account_info = ?, requester_phone = ?,
+             current_approver_role = ?, current_approver_user_id = ?, current_order_no = ?
          WHERE id = ?`,
-        [documentType, deptName, date, totalAmount, comment, remarks, aliasName, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, requestId]
+        [documentType, deptName, date, totalAmount, comment, remarks, aliasName, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, currentApproverRole, currentApproverUserId, nextOrderNo, requestId]
       );
 
       // 기존 항목 삭제 후 재삽입 (단순하게 처리)
@@ -283,66 +353,12 @@ app.post("/api/approval", async (req, res) => {
     } else {
       const [result] = await conn.query(
         `INSERT INTO approval_requests 
-         (document_type, dept_name, author, request_date, total_amount, comment, remarks, aliasName, status, category_gwan, category_hang, payee, account_info, requester_phone) 
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [documentType, deptName, author, date, totalAmount, comment, remarks, aliasName, initialStatus, selectedGwan, selectedHang, payee, accountInfo, requesterPhone]
+         (document_type, dept_name, author, request_date, total_amount, comment, remarks, aliasName, status, category_gwan, category_hang, payee, account_info, requester_phone, current_approver_role, current_approver_user_id, current_order_no) 
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, date, totalAmount, comment, remarks, aliasName, initialStatus, selectedGwan, selectedHang, payee, accountInfo, requesterPhone, currentApproverRole, currentApproverUserId, nextOrderNo]
       );
       requestId = result.insertId;
     }
-    //console.log("approval > requestId :", requestId);
-
-    // ✅ 신청자의 approver_order 찾기
-    const [applicantRows] = await conn.query(
-      `SELECT order_no 
-         FROM approval_line 
-        WHERE dept_name = ? AND approver_user_id = ?
-        LIMIT 1`,
-      [deptName, userId]
-    );
-
-    let nextApprovers = null;
-    let nextOrderNo = null;
-
-    if (req.body.selectedChoice === "owner") {
-      // ✅ 2안(Owner 부서 위원장 직행) 선택 시
-      const [chairmanRows] = await conn.query(
-        `SELECT approver_role, approver_user_id, order_no
-           FROM approval_line 
-          WHERE dept_name = ? AND approver_role = '위원장'`,
-        [deptName]
-      );
-      if (chairmanRows.length > 0) {
-        nextApprovers = chairmanRows;
-        nextOrderNo = chairmanRows[0].order_no;
-      }
-    } else if (applicantRows.length > 0) {
-      // ✅ 1안(부서별 기본순서) 선택 및 기안자 순번 존재 시
-      const applicantOrder = applicantRows[0].order_no;
-      const [nextRows] = await conn.query(
-        `SELECT approver_role, approver_user_id 
-           FROM approval_line 
-          WHERE dept_name = ? AND order_no = ?`,
-        [deptName, applicantOrder + 1]
-      );
-
-      if (nextRows.length > 0) {
-        nextApprovers = nextRows;
-        nextOrderNo = applicantOrder + 1;
-      }
-    }
-
-    // ✅ approval_requests에 다음 결재자 업데이트 (결재진행중일 때만)
-    if (initialStatus === "결재진행중" && nextApprovers && nextApprovers.length > 0) {
-      const roles = [...new Set(nextApprovers.map(a => a.approver_role))].join(',');
-      const userIds = nextApprovers.map(a => a.approver_user_id).join(',');
-      await conn.query(
-        `UPDATE approval_requests 
-            SET current_approver_role = ?, current_approver_user_id = ?, current_order_no = ?
-          WHERE id = ?`,
-        [roles, userIds, nextOrderNo, requestId]
-      );
-    }
-    // ❌ else 제거 → 자동 완료 금지
 
     // approval_items 저장
     if (items && items.length > 0) {
@@ -404,7 +420,7 @@ app.post("/api/approval", async (req, res) => {
   } catch (err) {
     await conn.rollback();
     console.error("❌ DB Insert Error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    res.status(400).json({ success: false, message: err.message, error: err.message });
   } finally {
     conn.release();
   }
@@ -855,13 +871,26 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
         [requestId, actualApproverRole, actualApproverId, comment, signaturePath]
       );
 
-      // ✅ 다음 결재자 찾기
-      const [nextRows] = await conn.query(
-        `SELECT approver_role, approver_user_id
-          FROM approval_line 
-          WHERE dept_name=? AND order_no=?`,
-        [dept_name, current_order_no + 1]
+      // ✅ 다음 결재자 순번 찾기 (순번 공백/건너뜀 대응: current_order_no 보다 큰 가장 빠른 order_no)
+      const [[nextOrderRow]] = await conn.query(
+        `SELECT MIN(order_no) AS next_order_no
+           FROM approval_line
+          WHERE dept_name = ? AND order_no > ?`,
+        [dept_name, current_order_no]
       );
+
+      let nextRows = [];
+      let nextOrderNo = null;
+
+      if (nextOrderRow && nextOrderRow.next_order_no != null) {
+        nextOrderNo = nextOrderRow.next_order_no;
+        [nextRows] = await conn.query(
+          `SELECT approver_role, approver_user_id
+             FROM approval_line 
+            WHERE dept_name = ? AND order_no = ?`,
+          [dept_name, nextOrderNo]
+        );
+      }
 
       if (nextRows.length > 0) {
         const roles = [...new Set(nextRows.map(a => a.approver_role))].join(',');
@@ -871,7 +900,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           `UPDATE approval_requests
             SET current_approver_role=?, current_approver_user_id=?, current_order_no=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
           WHERE id=?`,
-          [roles, userIds, current_order_no + 1, requestId]
+          [roles, userIds, nextOrderNo, requestId]
         );
 
         // 메일 발송 계획 (다음 결재자에게)
