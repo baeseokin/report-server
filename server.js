@@ -29,7 +29,7 @@ if (!process.env.NODE_ENV) {
 console.error("process.env.NODE_ENV:", process.env.NODE_ENV);
 
 // ✅ NODE_ENV 확정 후 env 헬퍼 로드 (순서 중요!)
-const { envPick, envNumber, ENV } = require("./env");
+const { envPick, envNumber, ENV, getSystemDate, getSystemToday, getSystemYear } = require("./env");
 
 const app = express();
 const PORT = 3001;
@@ -203,6 +203,16 @@ function getUserPrimaryRole(user) {
   // 없으면 첫 번째
   return roleNames[0] ?? null;
 }
+
+// ✅ 시스템 기준일자 조회 API (Mock Date 지원)
+app.get("/api/system/date", (req, res) => {
+  res.json({
+    success: true,
+    today: getSystemToday(),
+    year: getSystemYear(),
+    isMocked: !!envPick("MOCK_DATE"),
+  });
+});
 
 /* ------------------------------------------------
    ✅ 결재 요청 등록 API (결재자 라인 반영)
@@ -996,7 +1006,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           if (match) targetYear = parseInt(match[1], 10);
         }
         if (!targetYear) {
-          targetYear = new Date().getFullYear() + 1;
+          targetYear = getSystemYear() + 1;
         }
 
         // 🌟 1) 신규 신청 계정(is_new_category = 1 또는 category_id <= 0)들을 레벨 순서('목' 먼저, 그 다음 '세목')로 마스터 등록
@@ -1110,7 +1120,7 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
       // year는 결재일자가 아닌 '요청(보고) 연도'를 사용해야 budget-status(기준년도)와 dept-budget-status(approval_items.year)가 일치함
       if (deptObj && category_hang && total_amount > 0) {
         const [[yrRow]] = await conn.query("SELECT year FROM approval_items WHERE request_id = ? LIMIT 1", [requestId]);
-        const expenseYear = yrRow?.year != null ? yrRow.year : new Date().getFullYear();
+        const expenseYear = yrRow?.year != null ? yrRow.year : getSystemYear();
 
         await conn.query(
           `INSERT INTO expense_details 
@@ -2623,7 +2633,7 @@ app.post("/api/accountCategories", async (req, res) => {
     const [result] = await conn.query(
       `INSERT INTO account_categories (category_id, parent_id, category_name, level, valid_from)
        VALUES (?, ?, ?, ?, ?)`,
-      [category_id, parent_id || null, category_name, level, valid_from || new Date()]
+      [category_id, parent_id || null, category_name, level, valid_from || getSystemToday()]
     );
 
     await conn.commit();
@@ -2669,7 +2679,7 @@ app.put("/api/accountCategories/:id/expire", async (req, res) => {
       `UPDATE account_categories 
           SET valid_to=?, updated_at=CONVERT_TZ(NOW(), '+00:00', '+09:00')
         WHERE id=?`,
-      [valid_to || new Date(), req.params.id]
+      [valid_to || getSystemToday(), req.params.id]
     );
     res.json({ success: true });
   } catch (err) {
@@ -2696,7 +2706,7 @@ app.post("/api/departments/:deptId/account-mapping", async (req, res) => {
     await conn.beginTransaction();
     const deptId = req.params.deptId;
     const { categoryIds, year } = req.body; // [1, 2, 5, ...], 2026
-    const targetYear = year ? parseInt(year, 10) : new Date().getFullYear();
+    const targetYear = year ? parseInt(year, 10) : getSystemYear();
 
     // 기존 매핑 삭제 (연도별)
     await conn.query("DELETE FROM account_category_departments WHERE dept_id = ? AND year = ?", [deptId, targetYear]);
@@ -2801,7 +2811,7 @@ app.get("/api/budget-plans/template", async (req, res) => {
 
   try {
     const { deptName, targetYear: rawTargetYear } = req.query;
-    const targetYear = parseInt(rawTargetYear, 10) || (new Date().getFullYear() + 1);
+    const targetYear = parseInt(rawTargetYear, 10) || (getSystemYear() + 1);
     const baseYear = targetYear - 1; // 당해년도(전년도) 예산 기준
 
     // 부서 ID 확인
@@ -3012,7 +3022,7 @@ app.post("/api/budget-plans", async (req, res) => {
     const authorUserId = req.session.user.userId;
     const documentType = "예산편성서";
     const aliasName = `${targetYear}년도 ${deptName} 예산편성`;
-    const today = new Date().toISOString().split("T")[0];
+    const today = getSystemToday();
 
     // ✅ 결재상신 시 기존 건 상태 검증
     if (reqStatus === "결재진행중") {
@@ -3158,7 +3168,7 @@ app.post("/api/budget-plans", async (req, res) => {
       );
 
       const finalDeptId = deptId || 1;
-      const finalTargetYear = targetYear || (new Date().getFullYear() + 1);
+      const finalTargetYear = targetYear || (getSystemYear() + 1);
 
       // 기존 결재목록/통계 호환성을 위해 approval_items에도 저장
       const approvalItemValues = items
@@ -3301,7 +3311,7 @@ app.get("/api/budget-plans/:requestId", async (req, res) => {
 ------------------------------------------------ */
 app.get("/api/initial-expenses-data", async (req, res) => {
   try {
-    const year = req.query.year || new Date().getFullYear();
+    const year = req.query.year || getSystemYear();
     const [rows] = await pool.query(
       `WITH RECURSIVE category_descendants (root_category_id, id, category_id) AS (
            SELECT category_id, id, category_id FROM account_categories WHERE level = '항'
@@ -3736,7 +3746,7 @@ app.get("/api/expenses/summaryByCategory", async (req, res) => {
 ------------------------------------------------ */
 app.get("/api/budget-status", async (req, res) => {
   try {
-    const year = req.query.year || new Date().getFullYear();
+    const year = req.query.year || getSystemYear();
 
     // ✅ [전체 계정 모드] 기존 로직 유지
     const conditions = ["d.parent_dept_id IS NOT NULL"];
