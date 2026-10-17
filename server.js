@@ -672,7 +672,9 @@ app.post("/api/approvalList", async (req, res) => {
     } else if (status && status !== "전체") {
       where += " AND ar.status = ?";
       params.push(status);
-
+    } else {
+      // ✅ 전체 조회 시: 결재 상신 전인 임시저장(작성중) 건은 청구목록에 노출하지 않음
+      where += " AND ar.status NOT IN ('작성중', '임시저장')";
     }
 
     const [[{ count, totalAmount }]] = await pool.query(
@@ -747,6 +749,15 @@ app.get("/api/approval/detail/:id", async (req, res) => {
       WHERE ai.request_id = ?
     `, [id]);
 
+    // ✅ 예산편성서인 경우 budget_plan_items 조회 추가
+    if (request.document_type === '예산편성서') {
+      const [budgetPlanItems] = await pool.query(
+        `SELECT * FROM budget_plan_items WHERE request_id = ? ORDER BY sort_order ASC, id ASC`,
+        [id]
+      );
+      request.budgetPlanItems = budgetPlanItems;
+    }
+
     // ✅ 첨부파일 정보 포함
     const [files] = await pool.query(
       "SELECT id, file_name, file_path, mime_type, file_size, alias_name FROM approval_files WHERE request_id = ?",
@@ -802,6 +813,7 @@ app.get("/api/approval/detail/:id", async (req, res) => {
         mokName: i.mok_name,     // 명칭 추가
         semokName: i.semok_name  // 명칭 추가
       })),
+      budgetPlanItems: request.budgetPlanItems || [],
       attachedFiles: files,
       approvalHistory: history,
       approvalLine,
@@ -965,6 +977,131 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
           WHERE id=?`,
         [requestId]
       );
+
+      // ✅ 예산편성서인 경우: budget_plan_items의 말단(is_leaf=1) 계정들을 budgets 테이블로 자동 반영 (Upsert)
+      //    (신규 계정 신청 항목은 '목' -> '세목' 계층 순으로 account_categories 마스터에 자동 정식 등록 후 반영)
+      const [[budgetReqRow]] = await conn.query("SELECT document_type, aliasName, dept_name FROM approval_requests WHERE id = ?", [requestId]);
+      if (budgetReqRow?.document_type === '예산편성서') {
+        let requestDeptId = null;
+        if (budgetReqRow.dept_name) {
+          const [[dRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [budgetReqRow.dept_name]);
+          requestDeptId = dRow?.id || null;
+        }
+
+        // 대상 회계연도 결정 (approval_items의 year 또는 aliasName에서 추출)
+        const [[yrRow]] = await conn.query("SELECT year FROM approval_items WHERE request_id = ? LIMIT 1", [requestId]);
+        let targetYear = yrRow?.year;
+        if (!targetYear && budgetReqRow.aliasName) {
+          const match = budgetReqRow.aliasName.match(/(\d{4})년/);
+          if (match) targetYear = parseInt(match[1], 10);
+        }
+        if (!targetYear) {
+          targetYear = new Date().getFullYear() + 1;
+        }
+
+        // 🌟 1) 신규 신청 계정(is_new_category = 1 또는 category_id <= 0)들을 레벨 순서('목' 먼저, 그 다음 '세목')로 마스터 등록
+        const [allNewItems] = await conn.query(
+          `SELECT id, category_id, category_code, category_name, level, parent_id, owner_dept_id, is_new_category, is_leaf, request_amount
+             FROM budget_plan_items
+            WHERE request_id = ? AND (is_new_category = 1 OR category_id <= 0)
+            ORDER BY CASE level WHEN '목' THEN 1 WHEN '세목' THEN 2 ELSE 3 END ASC, id ASC`,
+          [requestId]
+        );
+
+        const tempIdMap = {}; // 임시 ID -> 정식 등록된 account_categories.id
+
+        for (const item of allNewItems) {
+          let resolvedParentId = item.parent_id;
+          if (resolvedParentId && tempIdMap[resolvedParentId]) {
+            resolvedParentId = tempIdMap[resolvedParentId];
+          }
+
+          let finalCategoryId = item.category_id;
+          let finalAccCode = null;
+
+          const [[existingCat]] = await conn.query(
+            `SELECT id, category_id FROM account_categories 
+              WHERE parent_id <=> ? AND category_name = ? AND (valid_to IS NULL OR valid_to >= ?)
+              LIMIT 1`,
+            [resolvedParentId, item.category_name, `${targetYear}-01-01`]
+          );
+
+          if (existingCat) {
+            finalCategoryId = existingCat.id;
+            finalAccCode = existingCat.category_id;
+          } else {
+            const [[maxCodeRow]] = await conn.query(
+              `SELECT MAX(CAST(SUBSTRING(category_id, 4) AS UNSIGNED)) as max_num 
+                 FROM account_categories 
+                WHERE category_id LIKE 'ACC%'`
+            );
+            const nextNum = (maxCodeRow?.max_num || 10000000) + 1;
+            const newAccCode = `ACC${String(nextNum).padStart(8, '0')}`;
+            finalAccCode = newAccCode;
+
+            const [catResult] = await conn.query(
+              `INSERT INTO account_categories 
+                (category_id, parent_id, category_name, level, owner_dept_id, valid_from)
+               VALUES (?, ?, ?, ?, ?, ?)`,
+              [
+                newAccCode,
+                resolvedParentId || null,
+                item.category_name,
+                item.level || '목',
+                item.owner_dept_id || requestDeptId || null,
+                `${targetYear}-01-01`
+              ]
+            );
+            finalCategoryId = catResult.insertId;
+            console.log(`✨ [신규 계정과목 마스터 등록 완료] level: ${item.level}, id: ${finalCategoryId}, 코드: ${newAccCode}, 계정명: ${item.category_name}`);
+          }
+
+          // 해당 부서(신청부서 / owner_dept)에 매핑 자동 추가 (예산관리 조회 연동)
+          const mappingDeptId = item.owner_dept_id || requestDeptId;
+          if (mappingDeptId) {
+            await conn.query(
+              `INSERT IGNORE INTO account_category_departments (account_category_id, dept_id, year)
+               VALUES (?, ?, ?)`,
+              [finalCategoryId, mappingDeptId, targetYear]
+            );
+          }
+
+          if (item.category_id) tempIdMap[item.category_id] = finalCategoryId;
+          tempIdMap[item.id] = finalCategoryId;
+
+          // budget_plan_items의 category_id 및 parent_id, category_code 업데이트
+          await conn.query(
+            `UPDATE budget_plan_items 
+                SET category_id = ?, category_code = ?, parent_id = ?, is_new_category = 0 
+              WHERE id = ?`,
+            [finalCategoryId, finalAccCode || String(finalCategoryId), resolvedParentId, item.id]
+          );
+        }
+
+        // 🌟 2) 말단(is_leaf=1) 계정들의 예산을 budgets 테이블에 Upsert
+        const [planLeafItems] = await conn.query(
+          `SELECT id, category_id, request_amount 
+             FROM budget_plan_items 
+            WHERE request_id = ? AND is_leaf = 1`,
+          [requestId]
+        );
+
+        if (planLeafItems && planLeafItems.length > 0) {
+          for (const item of planLeafItems) {
+            if (item.category_id && item.category_id > 0) {
+              const [[accCat]] = await conn.query("SELECT category_id FROM account_categories WHERE id = ?", [item.category_id]);
+              const accCode = accCat?.category_id || String(item.category_id);
+              await conn.query(
+                `INSERT INTO budgets (category_id, year, budget_amount)
+                 VALUES (?, ?, ?)
+                 ON DUPLICATE KEY UPDATE budget_amount = VALUES(budget_amount), updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')`,
+                [accCode, targetYear, item.request_amount]
+              );
+            }
+          }
+          console.log(`✅ [예산편성서 이관완료] ${targetYear}년도 ${planLeafItems.length}개 계정 예산 budgets 자동 반영 완료 (requestId: ${requestId})`);
+        }
+      }
 
       // ✅ dept_id 조회 (부서명 기준)
       const [[deptObj]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [dept_name]);
@@ -1259,7 +1396,7 @@ app.get("/api/files/:filename", async (req, res) => {
       return res.status(400).json({ error: "Invalid path" });
     }
 
-    // 1) 물리 파일 있으면 바로 응답
+    // 1) 물리 파일 있으면 바로 응답 (uploadDir 기준)
     if (fs.existsSync(absPath)) {
       if (req.query.downloadName) {
         return res.download(absPath, req.query.downloadName);
@@ -1267,12 +1404,21 @@ app.get("/api/files/:filename", async (req, res) => {
       return res.sendFile(absPath);
     }
 
+    // 1-1) 서명 디렉터리(SIGN_BASE_DIR) 물리 파일 확인
+    const signAbsPath = path.join(SIGN_BASE_DIR, path.basename(relPath));
+    if (fs.existsSync(signAbsPath)) {
+      if (req.query.downloadName) {
+        return res.download(signAbsPath, req.query.downloadName);
+      }
+      return res.sendFile(signAbsPath);
+    }
+
     // 2) 첨부파일 테이블 fallback
     let dbPath = null;
     {
       const [rows] = await pool.query(
-        "SELECT file_path FROM approval_files WHERE file_path = ? LIMIT 1",
-        [relPath]
+        "SELECT file_path FROM approval_files WHERE file_path = ? OR file_name = ? LIMIT 1",
+        [relPath, path.basename(relPath)]
       );
       if (rows.length) dbPath = path.join(uploadDir, rows[0].file_path);
     }
@@ -1284,6 +1430,20 @@ app.get("/api/files/:filename", async (req, res) => {
         [relPath, `signatures/${relPath}`]
       );
       if (srows.length) dbPath = path.join(uploadDir, srows[0].file_path);
+    }
+
+    // 3-1) 결재 이력(approval_history) 서명 테이블 fallback
+    if (!dbPath) {
+      const [ahrows] = await pool.query(
+        "SELECT signature_path FROM approval_history WHERE signature_path IN (?, ?) LIMIT 1",
+        [relPath, path.basename(relPath)]
+      );
+      if (ahrows.length && ahrows[0].signature_path) {
+        const candidate1 = path.join(SIGN_BASE_DIR, path.basename(ahrows[0].signature_path));
+        const candidate2 = path.join(uploadDir, ahrows[0].signature_path);
+        if (fs.existsSync(candidate1)) dbPath = candidate1;
+        else if (fs.existsSync(candidate2)) dbPath = candidate2;
+      }
     }
 
     if (dbPath && fs.existsSync(dbPath)) {
@@ -2339,11 +2499,28 @@ app.delete("/api/approval-lines/:id", async (req, res) => {
 // ✅ 전체 계정과목 조회 (마스터 관리용)
 app.get("/api/accountCategories", async (req, res) => {
   try {
-    const [rows] = await pool.query(
-      `SELECT id, category_id, parent_id, category_name, level, owner_dept_id, valid_from, valid_to, created_at, updated_at
-         FROM account_categories
-        ORDER BY category_id`
-    );
+    const { date, year } = req.query;
+    let query = `
+      SELECT id, category_id, parent_id, category_name, level, owner_dept_id,
+             DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
+             DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_to,
+             created_at, updated_at
+        FROM account_categories
+       WHERE 1=1
+    `;
+    const params = [];
+    if (date) {
+      query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
+      params.push(date, date);
+    } else if (year) {
+      const startDate = `${year}-01-01`;
+      const endDate = `${year}-12-31`;
+      query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
+      params.push(endDate, startDate);
+    }
+    query += ` ORDER BY category_id`;
+
+    const [rows] = await pool.query(query, params);
     res.json({ success: true, categories: rows });
   } catch (err) {
     console.error("❌ accountCategories 전체 조회 실패:", err);
@@ -2351,38 +2528,57 @@ app.get("/api/accountCategories", async (req, res) => {
   }
 });
 
-// 특정 부서별 계정과목 조회 (기준일자 조건 포함)
+// 특정 부서별 계정과목 조회 (기준일자 및 연도 조건 포함)
 app.get("/api/accountCategories/:deptId", async (req, res) => {
   try {
     const deptId = req.params.deptId;
     const { date, year } = req.query;
-    
-    // year 파라미터가 없으면 현재 연도 기준
-    const targetYear = year ? parseInt(year, 10) : new Date().getFullYear();
+
+    let filterStart = null;
+    let filterEnd = null;
+
+    if (date) {
+      filterStart = date;
+      filterEnd = date;
+    } else if (year) {
+      filterStart = `${year}-01-01`;
+      filterEnd = `${year}-12-31`;
+    }
 
     let query = "";
     const params = [];
 
     if (deptId === "all") {
       query = `
-        SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at
-        FROM account_categories ac
-        WHERE 1=1
+        SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id,
+               DATE_FORMAT(ac.valid_from, '%Y-%m-%d') AS valid_from,
+               DATE_FORMAT(ac.valid_to, '%Y-%m-%d') AS valid_to,
+               ac.created_at, ac.updated_at
+          FROM account_categories ac
+         WHERE 1=1
       `;
-      if (date) {
+      if (filterStart && filterEnd) {
         query += ` AND ac.valid_from <= ? AND (ac.valid_to IS NULL OR ac.valid_to >= ?)`;
-        params.push(date, date);
+        params.push(filterEnd, filterStart);
       }
-      query += ` ORDER BY category_id`;
+      query += ` ORDER BY ac.category_id`;
     } else {
       // ✅ RECURSIVE CTE를 사용하여 매핑된 계정의 모든 상위(부모) 계정까지 포함
+      let initCondition = "";
+      const initParams = [deptId];
+      if (filterStart && filterEnd) {
+        initCondition = ` AND ac.valid_from <= ? AND (ac.valid_to IS NULL OR ac.valid_to >= ?)`;
+        initParams.push(filterEnd, filterStart);
+      }
+
       query = `
         WITH RECURSIVE category_tree AS (
-          -- 초기항: 직접 매핑된 계정
+          -- 초기항: 직접 매핑된 계정 (유효기간 조건 반영)
           SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id, ac.valid_from, ac.valid_to, ac.created_at, ac.updated_at
             FROM account_categories ac
             INNER JOIN account_category_departments acd ON ac.id = acd.account_category_id
            WHERE acd.dept_id = ?
+           ${initCondition}
           
           UNION
           
@@ -2391,20 +2587,21 @@ app.get("/api/accountCategories/:deptId", async (req, res) => {
             FROM account_categories p
             INNER JOIN category_tree c ON c.parent_id = p.id
         )
-        SELECT DISTINCT ct.*,
+        SELECT DISTINCT ct.id, ct.category_id, ct.parent_id, ct.category_name, ct.level, ct.owner_dept_id,
+               DATE_FORMAT(ct.valid_from, '%Y-%m-%d') AS valid_from,
+               DATE_FORMAT(ct.valid_to, '%Y-%m-%d') AS valid_to,
+               ct.created_at, ct.updated_at,
                (SELECT GROUP_CONCAT(dept_id) FROM account_category_departments WHERE account_category_id = ct.id) AS dept_ids
           FROM category_tree ct
          WHERE 1=1
       `;
-      
-      params.push(deptId);
+      params.push(...initParams);
 
-      // ✅ 기준일자가 있으면 유효기간 조건 추가
-      if (date) {
-        query += ` AND valid_from <= ? AND (valid_to IS NULL OR valid_to >= ?)`;
-        params.push(date, date);
+      if (filterStart && filterEnd) {
+        query += ` AND ct.valid_from <= ? AND (ct.valid_to IS NULL OR ct.valid_to >= ?)`;
+        params.push(filterEnd, filterStart);
       }
-      query += ` ORDER BY category_id`;
+      query += ` ORDER BY ct.category_id`;
     }
 
     const [rows] = await pool.query(query, params);
@@ -2589,6 +2786,512 @@ app.post("/api/budgets/bulk", async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   } finally {
     conn.release();
+  }
+});
+
+/* ------------------------------------------------
+   📊 부서별 년도별 예산 기안·편성 API
+------------------------------------------------ */
+
+// ✅ 1. 예산편성 템플릿 조회 (당해년도 예산 자동 세팅 & 관·항·목·세목 4단계 계층)
+app.get("/api/budget-plans/template", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const { deptName, targetYear: rawTargetYear } = req.query;
+    const targetYear = parseInt(rawTargetYear, 10) || (new Date().getFullYear() + 1);
+    const baseYear = targetYear - 1; // 당해년도(전년도) 예산 기준
+
+    // 부서 ID 확인
+    let deptId = null;
+    if (deptName) {
+      const [[dept]] = await pool.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
+      if (dept) deptId = dept.id;
+    }
+
+    // 계정과목 조회 (부서 매핑 계정 우선)
+    let categories = [];
+    if (deptId) {
+      const [mappedRows] = await pool.query(`
+        WITH RECURSIVE category_tree AS (
+          SELECT ac.id, ac.category_id, ac.parent_id, ac.category_name, ac.level, ac.owner_dept_id
+            FROM account_categories ac
+            INNER JOIN account_category_departments acd ON ac.id = acd.account_category_id
+           WHERE acd.dept_id = ?
+          UNION
+          SELECT p.id, p.category_id, p.parent_id, p.category_name, p.level, p.owner_dept_id
+            FROM account_categories p
+            INNER JOIN category_tree c ON c.parent_id = p.id
+        )
+        SELECT DISTINCT ct.* FROM category_tree ct ORDER BY category_id
+      `, [deptId]);
+
+      if (mappedRows && mappedRows.length > 0) {
+        categories = mappedRows;
+      }
+    }
+
+    // 부서 매핑 계정이 없거나 전체 조회인 경우 유효한 전체 계정과목 조회
+    if (categories.length === 0) {
+      const [allRows] = await pool.query(`
+        SELECT id, category_id, parent_id, category_name, level, owner_dept_id
+          FROM account_categories
+         WHERE valid_to IS NULL OR valid_to >= CURDATE()
+         ORDER BY category_id
+      `);
+      categories = allRows;
+    }
+
+    // 당해년도(baseYear) 예산 조회 (budgets 테이블)
+    const [budgetRows] = await pool.query(`
+      SELECT category_id, SUM(budget_amount) as budget_amount
+        FROM budgets
+       WHERE year = ?
+       GROUP BY category_id
+    `, [baseYear]);
+
+    const budgetMap = {};
+    for (const b of budgetRows) {
+      budgetMap[b.category_id] = Number(b.budget_amount) || 0;
+    }
+
+    // 부서 목록 맵 (ID -> dept_name)
+    const [deptRows] = await pool.query("SELECT id, dept_name FROM departments");
+    const deptMap = {};
+    for (const d of deptRows) {
+      deptMap[d.id] = d.dept_name;
+    }
+
+    const catMap = {};
+    for (const c of categories) {
+      catMap[c.id] = c;
+    }
+
+    // leaf 판별 (자식이 없는 최하위 계정)
+    const parentIds = new Set(categories.map(c => c.parent_id).filter(Boolean));
+
+    const processedCategories = categories.map(c => {
+      const isLeaf = !parentIds.has(c.id);
+      const prevAmount = budgetMap[c.category_id] ?? 0;
+
+      // owner_dept_id가 비어있으면 부모 계정에서 찾아 상속
+      let resolvedOwnerDeptId = c.owner_dept_id;
+      let curr = c;
+      while (!resolvedOwnerDeptId && curr.parent_id && catMap[curr.parent_id]) {
+        curr = catMap[curr.parent_id];
+        resolvedOwnerDeptId = curr.owner_dept_id;
+      }
+
+      const ownerDeptName = resolvedOwnerDeptId ? (deptMap[resolvedOwnerDeptId] || "") : "";
+      // 해당 부서가 owner 부서인지 확인 (지정된 부서 ID와 일치할 때만 true)
+      const isOwner = deptId ? (resolvedOwnerDeptId === deptId) : true;
+
+      return {
+        id: c.id,
+        category_id: c.category_id,
+        parent_id: c.parent_id,
+        category_name: c.category_name,
+        level: c.level,
+        owner_dept_id: resolvedOwnerDeptId,
+        owner_dept_name: ownerDeptName,
+        is_owner: isOwner,
+        is_leaf: isLeaf ? 1 : 0,
+        prev_amount: prevAmount,
+        request_amount: isLeaf ? prevAmount : 0, // 최하위 계정은 당해년도 예산 그대로 기본 세팅!
+        diff_amount: 0,
+        calc_basis: isOwner ? "" : (ownerDeptName ? `${ownerDeptName}` : "")
+      };
+    });
+
+    // 해당 부서/연도의 기존 건 확인 (임시저장, 반려, 재정부이관완료)
+    let draftRow = null;
+    if (deptName && req.session.user?.userName) {
+      const [[d]] = await pool.query(
+        `SELECT id, status, aliasName, comment, updated_at
+           FROM approval_requests
+          WHERE document_type = '예산편성서'
+            AND dept_name = ?
+            AND aliasName = ?
+            AND (
+              (status IN ('작성중', '임시저장') AND author = ?)
+              OR status IN ('결재반려', '반려', '재정부이관완료', '재정부이관')
+            )
+          ORDER BY 
+            CASE 
+              WHEN status IN ('작성중', '임시저장') THEN 1
+              WHEN status IN ('결재반려', '반려') THEN 2
+              WHEN status IN ('재정부이관완료', '재정부이관') THEN 3
+              ELSE 4
+            END ASC,
+            id DESC 
+          LIMIT 1`,
+        [deptName, `${targetYear}년도 ${deptName} 예산편성`, req.session.user.userName]
+      );
+      draftRow = d || null;
+    }
+
+    res.json({
+      success: true,
+      targetYear,
+      baseYear,
+      deptId,
+      deptName,
+      draft: draftRow,
+      categories: processedCategories
+    });
+  } catch (err) {
+    console.error("❌ budget-plans/template 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ✅ 예산편성서 상신 전 기존 건 상태 체크 API
+app.get("/api/budget-plans/check-status", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const { deptName, targetYear, requestId } = req.query;
+    const aliasName = `${targetYear}년도 ${deptName} 예산편성`;
+    const excludeId = requestId ? parseInt(requestId, 10) : 0;
+
+    // 해당 부서/연도의 다른 예산편성서 건 조회 (결재진행중, 결재완료, 재정부이관완료)
+    const [rows] = await pool.query(
+      `SELECT id, status, aliasName, request_date, author
+         FROM approval_requests
+        WHERE document_type = '예산편성서'
+          AND dept_name = ?
+          AND aliasName = ?
+          AND id != ?
+          AND status IN ('결재진행중', '결재완료', '재정부이관완료')
+        ORDER BY id DESC`,
+      [deptName, aliasName, excludeId]
+    );
+
+    const inProgress = rows.find(r => r.status === '결재진행중' || r.status === '결재완료');
+    const transferred = rows.find(r => r.status === '재정부이관완료');
+
+    return res.json({
+      success: true,
+      hasInProgress: !!inProgress,
+      inProgressItem: inProgress || null,
+      hasTransferred: !!transferred,
+      transferredItem: transferred || null
+    });
+  } catch (err) {
+    console.error("❌ budget-plans/check-status 오류:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ✅ 2. 예산편성서 저장 및 결재 상신
+app.post("/api/budget-plans", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const {
+      requestId: existingRequestId,
+      deptName,
+      targetYear,
+      totalAmount,
+      comment,
+      status: reqStatus,
+      items,
+      signature
+    } = req.body;
+
+    const author = req.session.user.userName;
+    const authorUserId = req.session.user.userId;
+    const documentType = "예산편성서";
+    const aliasName = `${targetYear}년도 ${deptName} 예산편성`;
+    const today = new Date().toISOString().split("T")[0];
+
+    // ✅ 결재상신 시 기존 건 상태 검증
+    if (reqStatus === "결재진행중") {
+      const checkExcludeId = existingRequestId ? parseInt(existingRequestId, 10) : 0;
+      const [existingRows] = await conn.query(
+        `SELECT id, status FROM approval_requests
+          WHERE document_type = '예산편성서'
+            AND dept_name = ?
+            AND aliasName = ?
+            AND id != ?
+            AND status IN ('결재진행중', '결재완료')
+          LIMIT 1`,
+        [deptName, aliasName, checkExcludeId]
+      );
+
+      if (existingRows.length > 0) {
+        await conn.rollback();
+        return res.status(400).json({
+          success: false,
+          code: "ALREADY_IN_PROGRESS",
+          message: `해당 연도(${targetYear}년도)의 ${deptName} 예산편성서가 이미 결재진행중입니다.`
+        });
+      }
+    }
+
+    // 부서 ID 조회
+    const [[deptRow]] = await conn.query("SELECT id FROM departments WHERE dept_name = ?", [deptName]);
+    const deptId = deptRow?.id;
+
+    // 결재선 조회 (approval_line)
+    const [approvalLines] = await conn.query(
+      `SELECT approver_role, approver_user_id, order_no 
+         FROM approval_line 
+        WHERE dept_name = ? 
+        ORDER BY order_no ASC, id ASC`,
+      [deptName]
+    );
+
+    let initialStatus = reqStatus || "작성중";
+    let currentApproverRole = null;
+    let currentApproverUserId = null;
+    let nextOrderNo = null;
+
+    if (initialStatus === "결재진행중") {
+      // 1단계는 기안자 본인이므로 다음 결재자(2단계) 찾기
+      const nextApprover = approvalLines.find(line => line.order_no === 2) || approvalLines[1];
+      if (nextApprover) {
+        currentApproverRole = nextApprover.approver_role;
+        currentApproverUserId = nextApprover.approver_user_id;
+        nextOrderNo = nextApprover.order_no;
+      } else {
+        initialStatus = "결재완료";
+      }
+    }
+
+    let requestId = existingRequestId;
+    if (!requestId) {
+      // 기존 동일 부서/연도의 본인 임시저장 건이 있는지 확인하여 재사용
+      const [[existingDraft]] = await conn.query(
+        `SELECT id FROM approval_requests
+          WHERE document_type = ? AND dept_name = ? AND aliasName = ? AND author = ? AND status IN ('작성중', '임시저장')
+          ORDER BY id DESC LIMIT 1`,
+        [documentType, deptName, aliasName, author]
+      );
+      if (existingDraft) {
+        requestId = existingDraft.id;
+      }
+    }
+
+    if (requestId) {
+      await conn.query(
+        `UPDATE approval_requests
+            SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, status = ?,
+                current_approver_role = ?, current_approver_user_id = ?, current_order_no = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')
+          WHERE id = ?`,
+        [documentType, deptName, today, totalAmount, comment, aliasName, initialStatus, currentApproverRole, currentApproverUserId, nextOrderNo, requestId]
+      );
+      await conn.query("DELETE FROM budget_plan_items WHERE request_id = ?", [requestId]);
+      await conn.query("DELETE FROM approval_items WHERE request_id = ?", [requestId]);
+    } else {
+      const [insertResult] = await conn.query(
+        `INSERT INTO approval_requests
+          (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, current_approver_role, current_approver_user_id, current_order_no)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [documentType, deptName, author, today, totalAmount, comment, aliasName, initialStatus, currentApproverRole, currentApproverUserId, nextOrderNo]
+      );
+      requestId = insertResult.insertId;
+    }
+
+    // budget_plan_items 저장
+    if (items && items.length > 0) {
+      const [allCats] = await conn.query("SELECT id, category_id FROM account_categories");
+      const codeToIdMap = {};
+      for (const ac of allCats) {
+        codeToIdMap[ac.category_id] = ac.id;
+      }
+
+      const budgetItemValues = items.map((it, idx) => {
+        let catId = 0;
+        if (typeof it.id === "number" && !isNaN(it.id)) {
+          catId = it.id;
+        } else if (typeof it.category_id === "number" && !isNaN(it.category_id)) {
+          catId = it.category_id;
+        } else if (typeof it.category_id === "string") {
+          const parsed = parseInt(it.category_id, 10);
+          if (!isNaN(parsed) && String(parsed) === it.category_id.trim()) {
+            catId = parsed;
+          } else if (codeToIdMap[it.category_id]) {
+            catId = codeToIdMap[it.category_id];
+          }
+        }
+
+        // INT(11) 범위(-2147483648 ~ 2147483647) 안전 보호
+        if (catId < -2147483648 || catId > 2147483647) {
+          catId = -((Math.abs(catId) % 2000000000) + 1);
+        }
+
+        const catCode = it.category_code || (typeof it.category_id === "string" ? it.category_id : String(catId));
+
+        return [
+          requestId,
+          catId,
+          catCode,
+          it.category_name,
+          it.level,
+          it.parent_id || null,
+          it.owner_dept_id || deptId || null,
+          it.is_leaf ? 1 : 0,
+          it.is_new_category ? 1 : 0,
+          it.prev_amount || 0,
+          it.request_amount || 0,
+          it.diff_amount || 0,
+          it.calc_basis || null,
+          idx + 1
+        ];
+      });
+
+      await conn.query(
+        `INSERT INTO budget_plan_items
+          (request_id, category_id, category_code, category_name, level, parent_id, owner_dept_id, is_leaf, is_new_category, prev_amount, request_amount, diff_amount, calc_basis, sort_order)
+         VALUES ?`,
+        [budgetItemValues]
+      );
+
+      const finalDeptId = deptId || 1;
+      const finalTargetYear = targetYear || (new Date().getFullYear() + 1);
+
+      // 기존 결재목록/통계 호환성을 위해 approval_items에도 저장
+      const approvalItemValues = items
+        .filter(it => it.is_leaf)
+        .map(it => [
+          requestId,
+          null,
+          null,
+          String(it.category_id || ""),
+          null,
+          it.category_name,
+          it.request_amount || 0,
+          finalDeptId,
+          finalTargetYear
+        ]);
+
+      if (approvalItemValues.length > 0) {
+        await conn.query(
+          `INSERT INTO approval_items
+            (request_id, gwan, hang, mok, semok, detail, amount, dept_id, year)
+           VALUES ?`,
+          [approvalItemValues]
+        );
+      }
+    }
+
+    // 기안자 서명 이력 기록 (결재진행중 상신 시)
+    if (initialStatus === "결재진행중") {
+      let signaturePath = null;
+      if (typeof signature === "string" && signature.startsWith("data:image/png;base64,")) {
+        const base64Data = signature.replace(/^data:image\/png;base64,/, "");
+        const filename = `${Date.now()}_signature.png`;
+        try {
+          await fs.promises.writeFile(path.join(SIGN_BASE_DIR, filename), base64Data, "base64");
+          signaturePath = filename;
+        } catch (e) {
+          console.error("❌ 서명 파일 저장 실패:", e);
+        }
+      } else if (typeof signature === "string" && signature.trim()) {
+        const clean = signature.replace(/^.*\/api\/files\//, "").replace(/^signatures\//, "").replace(/^signatures%2F/, "");
+        signaturePath = decodeURIComponent(clean);
+      }
+
+      const drafterRole = approvalLines[0]?.approver_role || "회계";
+
+      // 기존 기안 및 결재 이력이 있다면 정리 (재상신 시 이전 결재선 초기화)
+      await conn.query("DELETE FROM approval_history WHERE request_id = ?", [requestId]);
+
+      await conn.query(
+        `INSERT INTO approval_history
+          (request_id, approver_role, approver_user_id, comment, signature_path, status, approved_at)
+         VALUES (?, ?, ?, ?, ?, '승인', CONVERT_TZ(NOW(), '+00:00', '+09:00'))`,
+        [requestId, drafterRole, authorUserId, comment, signaturePath]
+      );
+    }
+
+    await conn.commit();
+    res.json({ success: true, requestId, message: "예산편성서가 저장되었습니다." });
+
+    // 커밋 후 비동기 알림 발송 (결재진행중일 때 다음 결재자에게)
+    if (initialStatus === "결재진행중" && currentApproverUserId) {
+      setImmediate(async () => {
+        try {
+          const [nextUsers] = await pool.query(
+            `SELECT user_name, phone FROM users WHERE user_id IN (?)`,
+            [[currentApproverUserId]]
+          );
+          for (const nu of nextUsers) {
+            if (nu?.phone) {
+              await sendApprovalAlimTalk({
+                to: nu.phone,
+                templateCode: process.env.SENDON_TEMPLATE_ID,
+                deptName,
+                author,
+                requestDate: today,
+                totalAmount,
+                comment,
+                urlPath: "approvalStatus"
+              });
+            }
+          }
+        } catch (e) {
+          console.error("❌ 예산편성서 결재 알림 발송 오류:", e.message);
+        }
+      });
+    }
+  } catch (err) {
+    await conn.rollback();
+    console.error("❌ 예산편성서 저장 실패:", err);
+    res.status(500).json({ success: false, error: err.message, message: err.message });
+  } finally {
+    conn.release();
+  }
+});
+
+// ✅ 3. 예산편성서 상세 조회
+app.get("/api/budget-plans/:requestId", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const { requestId } = req.params;
+    const [[request]] = await pool.query("SELECT * FROM approval_requests WHERE id = ?", [requestId]);
+    if (!request) {
+      return res.status(404).json({ success: false, message: "예산편성서를 찾을 수 없습니다." });
+    }
+
+    const [items] = await pool.query(
+      "SELECT * FROM budget_plan_items WHERE request_id = ? ORDER BY sort_order ASC, id ASC",
+      [requestId]
+    );
+
+    const [history] = await pool.query(
+      `SELECT ah.*, u.user_name AS approver_user_name
+         FROM approval_history ah
+         LEFT JOIN users u ON ah.approver_user_id = u.user_id
+        WHERE ah.request_id = ?
+        ORDER BY ah.approved_at ASC`,
+      [requestId]
+    );
+
+    res.json({
+      success: true,
+      report: {
+        ...request,
+        budgetPlanItems: items,
+        history
+      }
+    });
+  } catch (err) {
+    console.error("❌ 예산편성서 상세 조회 실패:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
