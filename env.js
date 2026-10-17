@@ -38,5 +38,37 @@ function envBool(key, def) {
   }
   return def;
 }
+// ✅ 날짜 시뮬레이션(Mock Date) 헬퍼
+function getSystemDate() {
+  const mockDate = envPick("MOCK_DATE");
+  if (mockDate && /^\d{4}-\d{2}-\d{2}/.test(mockDate)) {
+    return new Date(mockDate);
+  }
+  return new Date();
+}
 
-module.exports = { envPick, envNumber, envBool, ENV };
+function getSystemToday() {
+  const mockDate = envPick("MOCK_DATE");
+  if (mockDate && /^\d{4}-\d{2}-\d{2}/.test(mockDate)) {
+    return mockDate.substring(0, 10);
+  }
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function getSystemYear() {
+  return parseInt(getSystemToday().substring(0, 4), 10);
+}
+
+module.exports = {
+  envPick,
+  envNumber,
+  envBool,
+  ENV,
+  getSystemDate,
+  getSystemToday,
+  getSystemYear,
+};
