@@ -1040,13 +1040,47 @@ app.post("/api/approval/approve", upload.single("signature"), async (req, res) =
             finalCategoryId = existingCat.id;
             finalAccCode = existingCat.category_id;
           } else {
-            const [[maxCodeRow]] = await conn.query(
-              `SELECT MAX(CAST(SUBSTRING(category_id, 4) AS UNSIGNED)) as max_num 
-                 FROM account_categories 
-                WHERE category_id LIKE 'ACC%'`
+            // ✅ 부모 계정 정보 조회 (관/항/목 코드 승계)
+            let g = "00", h = "00", m = "00", s = "00";
+            if (resolvedParentId) {
+              const [[parentRow]] = await conn.query(
+                "SELECT category_id FROM account_categories WHERE id = ?",
+                [resolvedParentId]
+              );
+              if (parentRow?.category_id && parentRow.category_id.startsWith("ACC") && parentRow.category_id.length >= 11) {
+                g = parentRow.category_id.substring(3, 5);
+                h = parentRow.category_id.substring(5, 7);
+                m = parentRow.category_id.substring(7, 9);
+                s = parentRow.category_id.substring(9, 11);
+              }
+            }
+
+            // 동일 부모 하위의 동일 레벨 형제 계정들 중 최대 순번 + 1
+            const childLevel = item.level || '세목';
+            const [siblings] = await conn.query(
+              "SELECT category_id FROM account_categories WHERE parent_id <=> ? AND level = ?",
+              [resolvedParentId || null, childLevel]
             );
-            const nextNum = (maxCodeRow?.max_num || 10000000) + 1;
-            const newAccCode = `ACC${String(nextNum).padStart(8, '0')}`;
+
+            let maxNum = 0;
+            for (const sib of siblings) {
+              if (sib.category_id && sib.category_id.startsWith("ACC") && sib.category_id.length >= 11) {
+                let num = 0;
+                if (childLevel === "항") num = parseInt(sib.category_id.substring(5, 7), 10) || 0;
+                else if (childLevel === "목") num = parseInt(sib.category_id.substring(7, 9), 10) || 0;
+                else if (childLevel === "세목") num = parseInt(sib.category_id.substring(9, 11), 10) || 0;
+                else if (childLevel === "관") num = parseInt(sib.category_id.substring(3, 5), 10) || 0;
+                if (num > maxNum) maxNum = num;
+              }
+            }
+
+            const next = String(maxNum + 1).padStart(2, "0");
+            if (childLevel === "관") g = next;
+            else if (childLevel === "항") h = next;
+            else if (childLevel === "목") m = next;
+            else if (childLevel === "세목") s = next;
+
+            const newAccCode = `ACC${g}${h}${m}${s}`;
             finalAccCode = newAccCode;
 
             const [catResult] = await conn.query(
