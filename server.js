@@ -3975,7 +3975,7 @@ app.get("/api/notices", async (req, res) => {
 
     // 최근 1주일 필터 표시를 위해 등록일 포함
     const [rows] = await pool.query(`
-      SELECT id, title, author_id, author_name, view_count, created_at
+      SELECT id, title, author_id, author_name, view_count, is_popup, created_at
       FROM notices
       ORDER BY created_at DESC
       LIMIT ? OFFSET ?
@@ -3991,6 +3991,34 @@ app.get("/api/notices", async (req, res) => {
   } catch (err) {
     console.error("❌ 공지사항 목록 조회 실패:", err);
     res.status(500).json({ success: false, message: "공지사항 목록 조회 실패" });
+  }
+});
+
+// 1-1. 활성 팝업 공지사항 조회 (로그인 시 팝업용)
+app.get("/api/notices/popups", async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT id, title, content, author_name, view_count, is_popup, created_at
+      FROM notices
+      WHERE is_popup = 1
+      ORDER BY id DESC
+    `);
+
+    for (const row of rows) {
+      const [files] = await pool.query(
+        "SELECT id, original_name, file_name, file_size FROM notice_files WHERE notice_id = ?",
+        [row.id]
+      );
+      row.files = files;
+    }
+
+    res.json({
+      success: true,
+      data: rows
+    });
+  } catch (err) {
+    console.error("❌ 팝업 공지사항 목록 조회 실패:", err);
+    res.status(500).json({ success: false, message: "팝업 공지사항 목록 조회 실패" });
   }
 });
 
@@ -4041,13 +4069,14 @@ app.post("/api/notices", upload.array("files", 50), async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const { title, content } = req.body;
+    const { title, content, is_popup } = req.body;
     const author_id = req.session.user.userId;
     const author_name = req.session.user.userName;
+    const isPopup = (is_popup === true || is_popup === 'true' || is_popup === 1 || is_popup === '1') ? 1 : 0;
 
     const [result] = await conn.query(
-      "INSERT INTO notices (title, content, author_id, author_name) VALUES (?, ?, ?, ?)",
-      [title, content, author_id, author_name]
+      "INSERT INTO notices (title, content, author_id, author_name, is_popup) VALUES (?, ?, ?, ?, ?)",
+      [title, content, author_id, author_name, isPopup]
     );
     const noticeId = result.insertId;
 
@@ -4083,11 +4112,12 @@ app.put("/api/notices/:id", upload.array("files", 50), async (req, res) => {
     await conn.beginTransaction();
 
     const { id } = req.params;
-    const { title, content, deletedFileIds } = req.body; // 삭제할 첨부파일 ID들 (JSON string)
+    const { title, content, deletedFileIds, is_popup } = req.body; // 삭제할 첨부파일 ID들 (JSON string)
+    const isPopup = (is_popup === true || is_popup === 'true' || is_popup === 1 || is_popup === '1') ? 1 : 0;
 
     await conn.query(
-      "UPDATE notices SET title = ?, content = ? WHERE id = ?",
-      [title, content, id]
+      "UPDATE notices SET title = ?, content = ?, is_popup = ? WHERE id = ?",
+      [title, content, isPopup, id]
     );
 
     // 삭제하기로 한 기존 파일 제거
