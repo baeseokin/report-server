@@ -93,3 +93,28 @@ CREATE TABLE IF NOT EXISTS user_favorites (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id, menu_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+
+-- ───────────────────────────────────────────────────────────
+-- 💡 Budget Plan Items (예산편성서 상세 내역 테이블)
+-- ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS budget_plan_items (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  request_id INT NOT NULL,
+  category_id INT NOT NULL,
+  category_code VARCHAR(50) DEFAULT NULL,
+  category_name VARCHAR(100) NOT NULL,
+  level ENUM('관','항','목','세목') NOT NULL,
+  parent_id INT DEFAULT NULL,
+  owner_dept_id INT DEFAULT NULL,
+  is_leaf TINYINT(1) DEFAULT 0,
+  is_new_category TINYINT(1) DEFAULT 0,
+  prev_amount BIGINT DEFAULT 0,
+  request_amount BIGINT NOT NULL DEFAULT 0,
+  diff_amount BIGINT DEFAULT 0,
+  calc_basis VARCHAR(500) DEFAULT NULL,
+  sort_order INT DEFAULT 0,
+  INDEX idx_req (request_id),
+  CONSTRAINT budget_plan_items_ibfk_1 FOREIGN KEY (request_id) REFERENCES approval_requests(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
