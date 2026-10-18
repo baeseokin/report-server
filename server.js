@@ -1964,6 +1964,16 @@ app.post("/api/users/:id/signatures", uploadSignature.single("file"), async (req
 });
 
 // ───────────────────────────────────────────────────────────
+// GET /api/users/me
+// 현재 로그인 사용자 정보 조회
+// ───────────────────────────────────────────────────────────
+app.get("/api/users/me", (req, res) => {
+  const u = getLoginUser(req);
+  if (!u) return res.status(401).json({ success: false, message: "Unauthorized" });
+  return res.json({ success: true, user: u });
+});
+
+// ───────────────────────────────────────────────────────────
 // GET /api/users/me/signature
 // 기본 서명(최신 is_default=1) 조회 → { signature: "/api/files/..." | null }
 // ───────────────────────────────────────────────────────────
@@ -3078,7 +3088,20 @@ app.post("/api/budget-plans", async (req, res) => {
       }
     }
 
-    let requestId = existingRequestId;
+    let requestId = null;
+    if (existingRequestId) {
+      const parsed = parseInt(existingRequestId, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        const [[checkReq]] = await conn.query(
+          "SELECT id FROM approval_requests WHERE id = ?",
+          [parsed]
+        );
+        if (checkReq) {
+          requestId = parsed;
+        }
+      }
+    }
+
     if (!requestId) {
       // 기존 동일 부서/연도의 본인 임시저장 건이 있는지 확인하여 재사용
       const [[existingDraft]] = await conn.query(
@@ -3093,15 +3116,26 @@ app.post("/api/budget-plans", async (req, res) => {
     }
 
     if (requestId) {
-      await conn.query(
+      const [updateResult] = await conn.query(
         `UPDATE approval_requests
             SET document_type = ?, dept_name = ?, request_date = ?, total_amount = ?, comment = ?, aliasName = ?, status = ?,
                 current_approver_role = ?, current_approver_user_id = ?, current_order_no = ?, updated_at = CONVERT_TZ(NOW(), '+00:00', '+09:00')
           WHERE id = ?`,
         [documentType, deptName, today, totalAmount, comment, aliasName, initialStatus, currentApproverRole, currentApproverUserId, nextOrderNo, requestId]
       );
-      await conn.query("DELETE FROM budget_plan_items WHERE request_id = ?", [requestId]);
-      await conn.query("DELETE FROM approval_items WHERE request_id = ?", [requestId]);
+
+      if (updateResult.affectedRows === 0) {
+        const [insertResult] = await conn.query(
+          `INSERT INTO approval_requests
+            (document_type, dept_name, author, request_date, total_amount, comment, aliasName, status, current_approver_role, current_approver_user_id, current_order_no)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [documentType, deptName, author, today, totalAmount, comment, aliasName, initialStatus, currentApproverRole, currentApproverUserId, nextOrderNo]
+        );
+        requestId = insertResult.insertId;
+      } else {
+        await conn.query("DELETE FROM budget_plan_items WHERE request_id = ?", [requestId]);
+        await conn.query("DELETE FROM approval_items WHERE request_id = ?", [requestId]);
+      }
     } else {
       const [insertResult] = await conn.query(
         `INSERT INTO approval_requests
@@ -3112,6 +3146,10 @@ app.post("/api/budget-plans", async (req, res) => {
       requestId = insertResult.insertId;
     }
 
+    if (!requestId) {
+      throw new Error("결재 요청 ID를 생성하지 못했습니다.");
+    }
+
     // budget_plan_items 저장
     if (items && items.length > 0) {
       const [allCats] = await conn.query("SELECT id, category_id FROM account_categories");
@@ -3120,7 +3158,42 @@ app.post("/api/budget-plans", async (req, res) => {
         codeToIdMap[ac.category_id] = ac.id;
       }
 
-      const budgetItemValues = items.map((it, idx) => {
+      // 계층 순서(관 -> 항 -> 목 -> 세목)로 정렬하여 sort_order 부여
+      const byParent = {};
+      items.forEach(it => {
+        const pid = it.parent_id ?? 0;
+        if (!byParent[pid]) byParent[pid] = [];
+        byParent[pid].push(it);
+      });
+
+      const parentKeyMap = new Set();
+      items.forEach(it => {
+        if (it.category_id != null) parentKeyMap.add(it.category_id);
+        if (it.id != null) parentKeyMap.add(it.id);
+      });
+
+      const roots = items.filter(it => it.level === '관' || !it.parent_id || !parentKeyMap.has(it.parent_id));
+      const sortedItems = [];
+      const visited = new Set();
+
+      const traverse = (item) => {
+        if (!item || visited.has(item)) return;
+        visited.add(item);
+        sortedItems.push(item);
+
+        const c1 = item.category_id != null ? (byParent[item.category_id] || []) : [];
+        const c2 = item.id != null && item.id !== item.category_id ? (byParent[item.id] || []) : [];
+        const children = [...c1];
+        c2.forEach(c => { if (!children.includes(c)) children.push(c); });
+        children.forEach(child => traverse(child));
+      };
+
+      roots.forEach(r => traverse(r));
+      items.forEach(it => {
+        if (!visited.has(it)) sortedItems.push(it);
+      });
+
+      const budgetItemValues = sortedItems.map((it, idx) => {
         let catId = 0;
         if (typeof it.id === "number" && !isNaN(it.id)) {
           catId = it.id;
