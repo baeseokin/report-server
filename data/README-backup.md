@@ -16,7 +16,7 @@ bash data/dbdump.sh
 ```
 
 - `.env`는 스크립트 기준으로 `../.env`를 자동으로 찾습니다.
-- 백업 파일: `data/all_databases_YYYYMMDD_HHMM.sql.gz`
+- 백업 파일: `data/{DB명}_YYYYMMDD_HHMM.sql.gz` (각 DB별 개별 파일로 백업)
 - 로그: `data/backup.log`
 
 ## 2. WSL에서 주기 실행 (cron)
