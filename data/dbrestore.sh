@@ -1,75 +1,84 @@
 #!/bin/bash
 
-# === .env 파일 로드 ===
-ENV_FILE="/Users/baeseokin/report-server/.env"
+# === 스크립트 위치 기준 경로 (Mac / WSL 공통) ===
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPORT_SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-if [ -f "$ENV_FILE" ]; then
-    set -o allexport
-    . "$ENV_FILE"
-    set +o allexport
+# .env 파일 탐색 (프로젝트 루트 우선, 없으면 현재 폴더)
+if [ -f "${REPORT_SERVER_DIR}/.env" ]; then
+    ENV_FILE="${REPORT_SERVER_DIR}/.env"
+elif [ -f "${SCRIPT_DIR}/.env" ]; then
+    ENV_FILE="${SCRIPT_DIR}/.env"
 else
-    echo "ERROR: .env 파일을 찾을 수 없습니다: $ENV_FILE"
+    echo "ERROR: .env 파일을 찾을 수 없습니다."
     exit 1
 fi
 
-# === 환경 설정 (development용) ===
-USER="${DB_USER__development}"
-PASSWORD="${DB_PASSWORD__development}"
-HOST="${DB_HOST__development}"
-PORT="${DB_PORT__development}"
-BACKUP_DIR="/Users/baeseokin/report-server/data"
+set -o allexport
+. "$ENV_FILE"
+set +o allexport
+set -o pipefail
 
-# === 복구 대상 파일 선택 ===
-# 1순위: 인자로 받은 파일
-# 2순위: BACKUP_DIR 내 가장 최신 all_databases_*.sql / .sql.gz
+# === DB 접속 설정 (복구 권한 필요) ===
+USER="${BACKUP_DB_USER:-$DB_USER__development}"
+PASSWORD="${BACKUP_DB_PASSWORD:-$DB_PASSWORD__development}"
+HOST="${DB_HOST__development:-localhost}"
+PORT="${DB_PORT__development:-32006}"
+BACKUP_DIR="${BACKUP_DIR:-$SCRIPT_DIR}"
+
 TARGET_FILE="$1"
 
-if [ -z "$TARGET_FILE" ]; then
-    # 최신 파일 검색 (.sql 또는 .sql.gz)
-    TARGET_FILE=$(ls -1t "${BACKUP_DIR}"/all_databases_*.sql* 2>/dev/null | head -n 1)
-fi
-
+# === 복구 대상 파일 미지정 시 가이드 및 최근 백업 목록 출력 ===
 if [ -z "$TARGET_FILE" ] || [ ! -f "$TARGET_FILE" ]; then
-    echo "ERROR: 복구할 dump 파일을 찾을 수 없습니다."
-    echo " - 사용법: $0 [복구할_dump_파일경로]"
-    echo " - 또는 ${BACKUP_DIR}/all_databases_*.sql(.gz) 가 존재해야 합니다."
+    echo "=================================================="
+    echo " 사용법: $0 <복구할_DB_백업파일경로 (.sql.gz 또는 .sql)>"
+    echo " 예시  : $0 ${BACKUP_DIR}/roomdb_20261023_2145.sql.gz"
+    echo "=================================================="
+    echo
+    echo "최근 백업된 파일 목록 (최신 10개):"
+    if [ -d "$BACKUP_DIR" ]; then
+        ls -1t "${BACKUP_DIR}"/*.sql* 2>/dev/null | head -n 10
+    else
+        echo " (백업 디렉토리가 없습니다: $BACKUP_DIR)"
+    fi
     exit 1
 fi
 
-echo "복구 대상 파일: $TARGET_FILE"
-echo
-echo "⚠️  이 작업은 기존 DB들을 덮어쓸 수 있습니다."
-read -p "계속 진행하시겠습니까? (yes/NO): " ANSWER
+# === gzip 파일 무결성 사전 검사 ===
+if [[ "$TARGET_FILE" == *.gz ]]; then
+    if ! gzip -t "$TARGET_FILE" 2>/dev/null; then
+        echo "ERROR: '$TARGET_FILE' 파일이 유효한 gzip 압축 파일이 아니거나 손상되었습니다."
+        exit 1
+    fi
+fi
 
-if [ "$ANSWER" != "yes" ]; then
+
+echo "복구 대상 파일: $TARGET_FILE"
+echo "대상 호스트   : $HOST:$PORT (User: $USER)"
+echo
+read -p "계속 진행하시겠습니까? (yes/y/NO): " ANSWER
+
+# 공백 제거 및 소문자 변환
+ANSWER_CLEAN=$(echo "$ANSWER" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')
+
+if [[ "$ANSWER_CLEAN" != "yes" && "$ANSWER_CLEAN" != "y" ]]; then
     echo "복구 작업을 취소했습니다."
     exit 0
 fi
 
-echo
-echo "[$(date +"%Y-%m-%d %H:%M:%S")] 전체 DB 복구 시작"
 
-# === 실제 복구 수행 ===
-# .gz 이면 gunzip -c 로 풀어서 mysql로 파이프
-# .sql 이면 mysql < 파일
+echo
+echo "[$(date +"%Y-%m-%d %H:%M:%S")] 복구 시작..."
+
 if [[ "$TARGET_FILE" == *.gz ]]; then
-    gunzip -c "$TARGET_FILE" | mysql \
-        -h "$HOST" \
-        -P "$PORT" \
-        -u "$USER" \
-        -p"$PASSWORD"
+    gunzip -c "$TARGET_FILE" | mysql -h "$HOST" -P "$PORT" -u "$USER" -p"$PASSWORD"
 else
-    mysql \
-        -h "$HOST" \
-        -P "$PORT" \
-        -u "$USER" \
-        -p"$PASSWORD" \
-        < "$TARGET_FILE"
+    mysql -h "$HOST" -P "$PORT" -u "$USER" -p"$PASSWORD" < "$TARGET_FILE"
 fi
 
 if [ $? -ne 0 ]; then
-    echo "[$(date +"%Y-%m-%d %H:%M:%S")] 복구 실패"
+    echo "[$(date +"%Y-%m-%d %H:%M:%S")] [ERROR] 복구 실패"
     exit 1
 fi
 
-echo "[$(date +"%Y-%m-%d %H:%M:%S")] 복구 완료"
+echo "[$(date +"%Y-%m-%d %H:%M:%S")] 복구 완료!"
