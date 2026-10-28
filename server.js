@@ -111,6 +111,12 @@ console.log(`📦 DB → ${envPick("DB_HOST", "localhost")}:${envNumber("DB_PORT
       await pool.query("ALTER TABLE approval_requests ADD COLUMN remarks TEXT AFTER comment");
       console.log("✅ [Migration] remarks 컬럼 추가 완료");
     }
+
+    // 메뉴명 변경 보정: '지급내역 조회' -> '지출내역 조회'
+    await pool.query("UPDATE IGNORE role_access SET menu_name = '지출내역 조회' WHERE menu_name = '지급내역 조회'");
+    await pool.query("DELETE FROM role_access WHERE menu_name = '지급내역 조회'");
+    await pool.query("UPDATE IGNORE user_favorites SET menu_name = '지출내역 조회' WHERE menu_name = '지급내역 조회'");
+    await pool.query("DELETE FROM user_favorites WHERE menu_name = '지급내역 조회'");
   } catch (err) {
     console.error("❌ [Migration] 스키마 확인 중 오류:", err.message);
   }
@@ -716,6 +722,154 @@ app.post("/api/approvalList", async (req, res) => {
     res.json({ success: true, rows, totalPages, totalCount: count, totalAmount: Number(totalAmount || 0) });
   } catch (err) {
     console.error("❌ DB Select Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* ------------------------------------------------
+   ✅ 지출내역 조회 API (재정부이관완료 건 대상)
+------------------------------------------------ */
+app.post("/api/paymentHistory", async (req, res) => {
+  if (!req.session.user) {
+    return res.status(401).json({ success: false, message: "로그인이 필요합니다." });
+  }
+
+  try {
+    const {
+      deptName: rawDeptName,
+      startDate,
+      endDate,
+      selectedGwan,
+      selectedHang,
+      keyword,
+      page = 1,
+      pageSize = 15,
+      isExcel = false
+    } = req.body;
+
+    const deptName = rawDeptName?.trim();
+
+    // 재정부이관완료 건 대상 (예산편성서 제외)
+    let where = "WHERE ar.status = '재정부이관완료' AND ar.document_type != '예산편성서'";
+    const params = [];
+
+    // ✅ 권한 확인: 재정부, 교회, 관리자는 전체 또는 특정 부서 선택 가능, 그 외 사용자는 본인 부서로 한정
+    const sessionDeptName = req.session.user?.deptName;
+    const isFullAccessUser = (sessionDeptName === "교회" || sessionDeptName === "재정부" || isAdmin(req));
+
+    let targetDeptName = deptName;
+    if (!isFullAccessUser) {
+      targetDeptName = sessionDeptName;
+    }
+
+    const isSearchAll = isFullAccessUser && (!targetDeptName || targetDeptName === "전체" || targetDeptName === "교회");
+
+    if (!isSearchAll && targetDeptName) {
+      // 특정 부서가 지정된 경우: 해당 부서 + 하위부서 재귀 조회
+      const [subDepts] = await pool.query(
+        `WITH RECURSIVE sub_depts AS (
+          SELECT id, dept_name, parent_dept_id
+          FROM departments
+          WHERE dept_name = ?
+          UNION ALL
+          SELECT d.id, d.dept_name, d.parent_dept_id
+          FROM departments d
+          INNER JOIN sub_depts sd ON d.parent_dept_id = sd.id
+        )
+        SELECT dept_name FROM sub_depts`,
+        [targetDeptName]
+      );
+      const deptList = subDepts.map(d => d.dept_name);
+      if (deptList.length > 0) {
+        where += ` AND ar.dept_name IN (${deptList.map(() => "?").join(",")})`;
+        params.push(...deptList);
+      } else {
+        where += " AND ar.dept_name = ?";
+        params.push(targetDeptName);
+      }
+    } else if (!isFullAccessUser && sessionDeptName) {
+      where += " AND ar.dept_name = ?";
+      params.push(sessionDeptName);
+    }
+
+    // 날짜 조건 (신청일자)
+    if (startDate) {
+      where += " AND ar.request_date >= ?";
+      params.push(startDate);
+    }
+    if (endDate) {
+      where += " AND ar.request_date <= CONCAT(?, ' 23:59:59')";
+      params.push(endDate);
+    }
+
+    // 관 / 항 조건
+    if (selectedGwan) {
+      where += " AND (ai.gwan = ? OR ar.category_gwan = ?)";
+      params.push(selectedGwan, selectedGwan);
+    }
+    if (selectedHang) {
+      where += " AND (ai.hang = ? OR ar.category_hang = ?)";
+      params.push(selectedHang, selectedHang);
+    }
+
+    // 검색어 조건 (지급내역, 신청자)
+    if (keyword && keyword.trim()) {
+      const k = `%${keyword.trim()}%`;
+      where += " AND (ai.detail LIKE ? OR ar.author LIKE ?)";
+      params.push(k, k);
+    }
+
+    // 건수 및 합계 금액
+    const [[{ count, totalAmount }]] = await pool.query(
+      `SELECT COUNT(*) as count, COALESCE(SUM(ai.amount), 0) as totalAmount
+       FROM approval_items ai
+       JOIN approval_requests ar ON ai.request_id = ar.id
+       ${where}`,
+      params
+    );
+
+    let rows = [];
+    let totalPages = 1;
+
+    const baseSelectSql = `
+      SELECT ai.id as item_id, ai.request_id, ai.detail, ai.amount,
+             ai.mok, ai.semok,
+             ar.dept_name, ar.request_date, ar.author, ar.status, ar.payee, ar.aliasName,
+             COALESCE(cg.category_name, ai.gwan, ar.category_gwan) as gwan_name,
+             COALESCE(ch.category_name, ai.hang, ar.category_hang) as hang_name,
+             COALESCE(cm.category_name, ai.mok) as mok_name,
+             COALESCE(cs.category_name, ai.semok) as semok_name
+      FROM approval_items ai
+      JOIN approval_requests ar ON ai.request_id = ar.id
+      LEFT JOIN account_categories cg ON COALESCE(ai.gwan, ar.category_gwan) = cg.category_id
+      LEFT JOIN account_categories ch ON COALESCE(ai.hang, ar.category_hang) = ch.category_id
+      LEFT JOIN account_categories cm ON ai.mok = cm.category_id
+      LEFT JOIN account_categories cs ON ai.semok = cs.category_id
+      ${where}
+      ORDER BY ar.request_date DESC, ai.id DESC
+    `;
+
+    if (isExcel) {
+      [rows] = await pool.query(baseSelectSql, params);
+      totalPages = 1;
+    } else {
+      const limit = Number(pageSize) || 15;
+      const currentPage = Math.max(1, Number(page) || 1);
+      totalPages = Math.ceil(count / limit) || 1;
+      const offset = (currentPage - 1) * limit;
+
+      [rows] = await pool.query(`${baseSelectSql} LIMIT ? OFFSET ?`, [...params, limit, offset]);
+    }
+
+    res.json({
+      success: true,
+      rows,
+      totalPages,
+      totalCount: count,
+      totalAmount: Number(totalAmount || 0)
+    });
+  } catch (err) {
+    console.error("❌ /api/paymentHistory 에러:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
