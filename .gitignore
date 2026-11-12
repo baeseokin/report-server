@@ -7,3 +7,17 @@ uploads/
 .env.*
 .env_local
 !.env.example
+
+# 의존성
+node_modules/
+
+# 백업·덤프·비밀 파일 (Git에 올리지 않음)
+data/tmp/
+data/*.sql
+data/*.sql.gz
+data/*.tar.gz
+data/backup.log*
+*.bundle
+
+# OS
+.DS_Store
