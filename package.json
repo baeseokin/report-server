@@ -5,8 +5,11 @@
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "jest --runInBand",
+    "test:db:up": "./scripts/test-db.sh up",
+    "test:db:down": "./scripts/test-db.sh down",
+    "prepare": "git config core.hooksPath .githooks 2>/dev/null || true"
   },
   "keywords": [],
   "author": "",
@@ -23,5 +26,9 @@
     "mysql2": "^3.14.3",
     "pinia": "^3.0.3",
     "sanitize-html": "^2.17.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.3.2"
   }
 }

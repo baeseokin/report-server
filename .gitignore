@@ -25,3 +25,6 @@ data/backup.log*
 # Kubernetes 매니페스트
 k8s/*.yaml
 k8s/*.yml
+
+# 테스트
+coverage/

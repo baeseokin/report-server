@@ -8,3 +8,11 @@ npm-debug.log
 yarn-error.log
 .env_local
 server.log
+tests
+coverage
+docs
+
+# 테스트 전용 (배포 이미지에 포함하지 않음)
+jest.config.js
+scripts/test-db.sh
+.githooks

@@ -1,0 +1,23 @@
+#!/bin/bash
+# push 전에 자동화 테스트를 실행합니다. 실패하면 push 를 중단합니다.
+# 급할 때 건너뛰기: git push --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+echo "🧪 [pre-push] 자동화 테스트 실행"
+
+if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+  echo "❌ [pre-push] Docker 가 실행 중이 아니어서 테스트 DB를 띄울 수 없습니다."
+  echo "   Docker 를 켠 뒤 다시 push 하거나, 건너뛰려면 git push --no-verify"
+  exit 1
+fi
+
+./scripts/test-db.sh up || exit 1
+
+if ! npm test --silent; then
+  echo ""
+  echo "❌ [pre-push] 테스트 실패로 push 를 중단했습니다. 위 실패 내용을 확인하세요."
+  echo "   (정말 필요하면 git push --no-verify 로 건너뛸 수 있습니다)"
+  exit 1
+fi
+
+echo "✅ [pre-push] 테스트 통과"

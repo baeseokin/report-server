@@ -3,9 +3,19 @@ const fs = require("fs");
 const path = require("path");
 const dotenv = require("dotenv");
 
+const os = require("os");
+
 // 1) .env 로드
 const ENV_FILE = path.resolve(process.cwd(), ".env");
 if (fs.existsSync(ENV_FILE)) dotenv.config({ path: ENV_FILE });
+
+// 2) NODE_ENV 자동 감지 (로컬=development, Pod/컨테이너=production)
+//    - 명시적으로 NODE_ENV가 있으면 그 값을 우선 사용
+//    - K8s 환경 변수(KUBERNETES_SERVICE_HOST) 또는 hostname 패턴으로 감지
+if (!process.env.NODE_ENV) {
+  const isK8s = !!process.env.KUBERNETES_SERVICE_HOST || /pod|deploy|stateful|sts/i.test(os.hostname());
+  process.env.NODE_ENV = isK8s ? "production" : "development";
+}
 
 const ENV = (process.env.NODE_ENV || "development").toLowerCase();
 
@@ -39,19 +49,34 @@ function envBool(key, def) {
   return def;
 }
 // ✅ 날짜 시뮬레이션(Mock Date) 헬퍼
-function getSystemDate() {
+//    MOCK_DATE=YYYY-MM-DD 를 설정하면 해당 일자를 시스템 기준일자로 사용합니다. (개발·테스트용)
+//    운영(production)에서는 실수로 설정되어 있어도 무시합니다.
+let mockDateWarned = false;
+function getMockDate() {
   const mockDate = envPick("MOCK_DATE");
-  if (mockDate && /^\d{4}-\d{2}-\d{2}/.test(mockDate)) {
-    return new Date(mockDate);
+  if (!mockDate || !/^\d{4}-\d{2}-\d{2}/.test(mockDate)) return null;
+  if (ENV === "production") {
+    if (!mockDateWarned) {
+      console.warn(`⚠️ 운영 환경에서는 MOCK_DATE(${mockDate})를 무시하고 실제 날짜를 사용합니다.`);
+      mockDateWarned = true;
+    }
+    return null;
   }
-  return new Date();
+  return mockDate;
+}
+
+function isDateMocked() {
+  return getMockDate() !== null;
+}
+
+function getSystemDate() {
+  const mockDate = getMockDate();
+  return mockDate ? new Date(mockDate) : new Date();
 }
 
 function getSystemToday() {
-  const mockDate = envPick("MOCK_DATE");
-  if (mockDate && /^\d{4}-\d{2}-\d{2}/.test(mockDate)) {
-    return mockDate.substring(0, 10);
-  }
+  const mockDate = getMockDate();
+  if (mockDate) return mockDate.substring(0, 10);
   const now = new Date();
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
@@ -68,6 +93,7 @@ module.exports = {
   envNumber,
   envBool,
   ENV,
+  isDateMocked,
   getSystemDate,
   getSystemToday,
   getSystemYear,

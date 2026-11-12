@@ -1,13 +1,8 @@
-const mysql = require("mysql2/promise");
+// [적용 완료] account_category_departments 에 회계연도(year) 컬럼 추가 및 PK 변경
+// 실행: node db/migrations/2026-09-05_account_category_departments_year.js  (.env 의 DB 설정 사용)
+const { pool } = require("../../lib/db");
 
 async function migrate() {
-  const pool = mysql.createPool({
-    host: "localhost",
-    port: 32006,
-    user: "reportuser",
-    password: "reportpass",
-    database: "reportdb",
-  });
   
   const conn = await pool.getConnection();
   try {
