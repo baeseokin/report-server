@@ -8,6 +8,18 @@ npm test              # 테스트 실행 — 매번 db/schema.sql 로 reportdb_t
 npm run test:db:down  # 컨테이너 삭제
 ```
 
+## 커밋 전 자동 실행 (git hook)
+
+`git commit` 때 `.githooks/pre-commit` 이 스테이징된 변경과 관련된 테스트를 실행하고, 실패하면 커밋을 막습니다.
+
+1. 서버 API 테스트(jest) 전체 (약 5초)
+2. 바뀐 API 를 실제로 호출하는 **화면 E2E 케이스**만 PC · iPhone · Android 에서 실행 (`../report-form-ui` 의 Playwright 사용)
+
+- 영향 범위 계산과 실행은 `../report-form-ui/e2e/run-related.sh --server` 가 담당합니다. 자세한 내용은 `../report-form-ui/e2e/README.md`.
+- 문서·배포 파일만 바뀌면 건너뜁니다. 화면 E2E 가 호출하지 않는 API 변경은 경고만 표시합니다.
+- Claude Code 로 커밋할 때는 실패 원인 분석·수정·재실행과 테스트 케이스 제안까지 자동으로 진행합니다 (`.claude/skills/e2e`).
+- report-form-ui 가 없으면 서버 API 테스트만 실행합니다. 위치가 다르면 `REPORT_FORM_UI_DIR` 로 지정하세요.
+
 ## push 전 자동 실행 (git hook)
 
 `git push` 때 `.githooks/pre-push`가 테스트 DB를 띄우고 `npm test`를 실행합니다. 실패하면 push가 중단됩니다.
